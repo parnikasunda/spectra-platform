@@ -1,0 +1,6 @@
+{
+  "name": "Argus Anti-Piracy Intelligence & Evidence Platform",
+  "description": "Production-grade anti-piracy intelligence and digital evidence platform for VOD media and live sports streams with perceptual fingerprinting and temporal verification.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

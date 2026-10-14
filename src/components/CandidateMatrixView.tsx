@@ -1,0 +1,366 @@
+/**
+ * Argus Anti-Piracy Intelligence & Evidence Platform
+ * Stage C — Candidate Verification Matrix & Diagnostic Inspector
+ */
+
+import React, { useState } from 'react';
+import { 
+  Radio, 
+  CheckCircle2, 
+  AlertTriangle, 
+  XCircle, 
+  Lock, 
+  ExternalLink, 
+  RefreshCw, 
+  Search, 
+  Eye, 
+  Terminal, 
+  X,
+  Play,
+  Globe
+} from 'lucide-react';
+import { CandidateItem, PipelineStatus, ReferenceItem } from '../types/client.js';
+
+interface CandidateMatrixViewProps {
+  candidates: CandidateItem[];
+  references: ReferenceItem[];
+  onRefresh: () => void;
+  onVerifyCandidate: (candidateId: string, targetReferenceId?: string) => Promise<any>;
+  onQuickInspect: (payload: { url: string; title?: string; target_reference_id?: string }) => Promise<any>;
+  onNavigateToEvidence: (evidenceId?: string) => void;
+}
+
+export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
+  candidates,
+  references,
+  onRefresh,
+  onVerifyCandidate,
+  onQuickInspect,
+  onNavigateToEvidence
+}) => {
+  const [selectedCandidate, setSelectedCandidate] = useState<CandidateItem | null>(null);
+  const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+
+  // Quick inspect state
+  const [quickUrl, setQuickUrl] = useState('');
+  const [quickRefId, setQuickRefId] = useState(references[0]?.id || '');
+  const [isQuickInspecting, setIsQuickInspecting] = useState(false);
+  const [quickInspectResult, setQuickInspectResult] = useState<any | null>(null);
+
+  const handleVerify = async (cand: CandidateItem) => {
+    setVerifyingId(cand.id);
+    try {
+      const res = await onVerifyCandidate(cand.id, cand.reference_id || undefined);
+      if (res?.candidate) {
+        setSelectedCandidate(res.candidate);
+      }
+      onRefresh();
+    } catch (err: any) {
+      alert(`Verification error: ${err.message}`);
+    } finally {
+      setVerifyingId(null);
+    }
+  };
+
+  const handleQuickInspectSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quickUrl) return;
+
+    setIsQuickInspecting(true);
+    setQuickInspectResult(null);
+
+    try {
+      const result = await onQuickInspect({
+        url: quickUrl,
+        target_reference_id: quickRefId || undefined
+      });
+      setQuickInspectResult(result);
+      if (result?.candidate) {
+        setSelectedCandidate(result.candidate);
+      }
+      onRefresh();
+    } catch (err: any) {
+      alert(`Inspection failed: ${err.message}`);
+    } finally {
+      setIsQuickInspecting(false);
+    }
+  };
+
+  const filteredCandidates = candidates.filter(c => {
+    if (filterStatus !== 'ALL' && c.pipeline_status !== filterStatus) return false;
+    if (searchQuery) {
+      const q = searchQuery.toLowerCase();
+      return (
+        c.source_url.toLowerCase().includes(q) ||
+        c.domain.toLowerCase().includes(q) ||
+        c.discovered_title.toLowerCase().includes(q)
+      );
+    }
+    return true;
+  });
+
+  const getStatusBadge = (status: PipelineStatus) => {
+    switch (status) {
+      case 'ANALYZED':
+        return <span className="text-emerald-400 font-mono text-[11px] font-semibold">ANALYZED</span>;
+      case 'ACQUIRED':
+        return <span className="text-cyan-400 font-mono text-[11px]">ACQUIRED</span>;
+      case 'MEDIA_DETECTED':
+        return <span className="text-blue-400 font-mono text-[11px]">MEDIA_DETECTED</span>;
+      case 'REACHABLE':
+        return <span className="text-slate-300 font-mono text-[11px]">REACHABLE</span>;
+      case 'DRM_PROTECTED':
+        return <span className="text-amber-400 font-mono text-[11px] flex items-center gap-1"><Lock className="w-3 h-3" /> DRM_PROTECTED</span>;
+      case 'UNREACHABLE':
+        return <span className="text-rose-400 font-mono text-[11px]">UNREACHABLE</span>;
+      default:
+        return <span className="text-slate-400 font-mono text-[11px]">DISCOVERED</span>;
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* Header bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-800/80 pb-4">
+        <div>
+          <h1 className="text-xl font-bold tracking-tight text-white">Candidate Source Verification Matrix</h1>
+          <p className="text-xs text-slate-400 mt-0.5">
+            Stage C: Network reachability testing, stream container inspection, DRM detection, and pipeline state transitions
+          </p>
+        </div>
+
+        <button
+          onClick={onRefresh}
+          className="p-1.5 text-slate-400 hover:text-white rounded border border-slate-800 hover:bg-slate-900 transition-colors self-start sm:self-auto"
+          title="Refresh table"
+        >
+          <RefreshCw className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Ad-hoc Quick Inspect Console */}
+      <div className="p-4 rounded-lg bg-slate-900/50 border border-slate-800/80 space-y-3">
+        <div className="flex items-center justify-between">
+          <div className="flex items-center gap-2">
+            <Radio className="w-4 h-4 text-cyan-400" />
+            <h2 className="text-xs font-semibold text-white uppercase tracking-wider font-mono">
+              Ad-Hoc Source Inspector (Live Probe)
+            </h2>
+          </div>
+          <span className="text-[11px] text-slate-400">Probe any candidate URL on demand</span>
+        </div>
+
+        <form onSubmit={handleQuickInspectSubmit} className="flex flex-col sm:flex-row gap-2">
+          <input
+            type="url"
+            required
+            value={quickUrl}
+            onChange={(e) => setQuickUrl(e.target.value)}
+            placeholder="Paste candidate stream or webpage URL (e.g. https://domain.tv/live/stream.m3u8)"
+            className="flex-1 px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 font-mono"
+          />
+
+          <select
+            value={quickRefId}
+            onChange={(e) => setQuickRefId(e.target.value)}
+            className="px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white focus:outline-none focus:border-cyan-400 font-sans"
+          >
+            <option value="">Compare against (Reference)</option>
+            {references.map(r => (
+              <option key={r.id} value={r.id}>{r.title}</option>
+            ))}
+          </select>
+
+          <button
+            type="submit"
+            disabled={isQuickInspecting}
+            className="px-4 py-1.5 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded font-sans transition-colors disabled:opacity-50 whitespace-nowrap cursor-pointer"
+          >
+            {isQuickInspecting ? 'Inspecting...' : 'Quick Inspect'}
+          </button>
+        </form>
+      </div>
+
+      {/* Filter and Search Bar */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+        <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded overflow-x-auto">
+          {['ALL', 'DISCOVERED', 'REACHABLE', 'MEDIA_DETECTED', 'ANALYZED', 'DRM_PROTECTED', 'UNREACHABLE'].map(s => (
+            <button
+              key={s}
+              onClick={() => setFilterStatus(s)}
+              className={`px-2.5 py-1 text-xs font-mono transition-colors rounded whitespace-nowrap ${
+                filterStatus === s ? 'bg-slate-800 text-white font-medium' : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              {s}
+            </button>
+          ))}
+        </div>
+
+        <div className="relative w-full sm:w-64">
+          <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search domain or URL..."
+            className="w-full pl-8 pr-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+          />
+        </div>
+      </div>
+
+      {/* Candidate Matrix Table */}
+      <div className="rounded-lg bg-slate-900/40 border border-slate-800/80 overflow-hidden">
+        <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
+          <h2 className="text-sm font-semibold text-white">Surveillance Candidate Inventory</h2>
+          <span className="text-xs text-slate-400 font-mono">Found: {filteredCandidates.length}</span>
+        </div>
+
+        {filteredCandidates.length === 0 ? (
+          <div className="p-12 text-center text-slate-400 text-xs space-y-2">
+            <p>No candidate sources match current criteria.</p>
+            <p className="text-slate-400">Launch a discovery sweep or paste a stream URL into the Quick Inspector.</p>
+          </div>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs">
+              <thead className="bg-slate-950/60 text-slate-400 border-b border-slate-800 font-mono">
+                <tr>
+                  <th className="py-2.5 px-4 font-medium">Domain / Source</th>
+                  <th className="py-2.5 px-4 font-medium">Discovery Provider</th>
+                  <th className="py-2.5 px-4 font-medium">Pipeline Status</th>
+                  <th className="py-2.5 px-4 font-medium">HTTP Code</th>
+                  <th className="py-2.5 px-4 font-medium">Latency</th>
+                  <th className="py-2.5 px-4 font-medium">Media Type</th>
+                  <th className="py-2.5 px-4 font-medium text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-800/50">
+                {filteredCandidates.map((cand) => (
+                  <tr key={cand.id} className="hover:bg-slate-800/30 transition-colors">
+                    <td className="py-3 px-4 max-w-sm">
+                      <div className="font-semibold text-white">{cand.domain}</div>
+                      <div className="text-[11px] font-mono text-slate-400 truncate max-w-xs" title={cand.source_url}>
+                        {cand.source_url}
+                      </div>
+                    </td>
+                    <td className="py-3 px-4 font-mono text-[11px] text-cyan-400">
+                      {cand.discovery_provider}
+                    </td>
+                    <td className="py-3 px-4">
+                      {getStatusBadge(cand.pipeline_status)}
+                    </td>
+                    <td className="py-3 px-4 font-mono tabular-nums">
+                      {cand.reachability_code > 0 ? (
+                        <span className={cand.reachability_code === 200 ? 'text-emerald-400' : 'text-rose-400'}>
+                          {cand.reachability_code}
+                        </span>
+                      ) : (
+                        <span className="text-slate-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-4 font-mono text-slate-400 tabular-nums">
+                      {cand.reachability_latency_ms > 0 ? `${cand.reachability_latency_ms.toFixed(1)}ms` : '—'}
+                    </td>
+                    <td className="py-3 px-4 font-mono text-slate-300 text-[11px]">
+                      {cand.media_type}
+                    </td>
+                    <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
+                      <button
+                        onClick={() => setSelectedCandidate(cand)}
+                        className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors cursor-pointer"
+                        title="View inspection diagnostics"
+                      >
+                        <Terminal className="w-3.5 h-3.5" />
+                      </button>
+
+                      <button
+                        onClick={() => handleVerify(cand)}
+                        disabled={verifyingId === cand.id}
+                        className="px-2.5 py-1 text-[11px] font-medium text-slate-900 bg-cyan-400 hover:bg-cyan-300 rounded transition-colors disabled:opacity-50 cursor-pointer"
+                      >
+                        {verifyingId === cand.id ? 'Verifying...' : 'Verify & Match'}
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </div>
+
+      {/* Diagnostics Drawer / Modal */}
+      {selectedCandidate && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
+          <div className="bg-slate-900 border border-slate-800 rounded-lg max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl">
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-semibold text-white">
+                  Technical Diagnostics: {selectedCandidate.domain}
+                </h3>
+                <p className="text-xs text-slate-400 font-mono mt-0.5 truncate max-w-md">
+                  {selectedCandidate.source_url}
+                </p>
+              </div>
+              <button onClick={() => setSelectedCandidate(null)} className="text-slate-400 hover:text-white p-1">
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <div className="p-6 overflow-y-auto space-y-4 flex-1 font-mono text-xs">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                <div className="p-2.5 bg-slate-950 rounded border border-slate-800">
+                  <div className="text-[10px] text-slate-400">PIPELINE STATUS</div>
+                  <div className="text-slate-200 font-bold mt-0.5">{selectedCandidate.pipeline_status}</div>
+                </div>
+                <div className="p-2.5 bg-slate-950 rounded border border-slate-800">
+                  <div className="text-[10px] text-slate-400">HTTP CODE</div>
+                  <div className="text-slate-200 font-bold mt-0.5">{selectedCandidate.reachability_code || 'None'}</div>
+                </div>
+                <div className="p-2.5 bg-slate-950 rounded border border-slate-800">
+                  <div className="text-[10px] text-slate-400">LATENCY</div>
+                  <div className="text-slate-200 font-bold mt-0.5">{selectedCandidate.reachability_latency_ms.toFixed(1)} ms</div>
+                </div>
+                <div className="p-2.5 bg-slate-950 rounded border border-slate-800">
+                  <div className="text-[10px] text-slate-400">STREAM TYPE</div>
+                  <div className="text-slate-200 font-bold mt-0.5">{selectedCandidate.media_type}</div>
+                </div>
+              </div>
+
+              {/* Logs */}
+              <div className="space-y-1">
+                <div className="text-[11px] text-slate-400 font-semibold uppercase">Inspection Logs</div>
+                <pre className="p-3 bg-slate-950 rounded border border-slate-800 text-slate-300 whitespace-pre-wrap leading-relaxed text-[11px]">
+                  {selectedCandidate.verification_logs || 'No execution logs recorded yet.'}
+                </pre>
+              </div>
+
+              {/* Raw Headers */}
+              {selectedCandidate.raw_headers_json && (
+                <div className="space-y-1">
+                  <div className="text-[11px] text-slate-400 font-semibold uppercase">HTTP Response Headers</div>
+                  <pre className="p-3 bg-slate-950 rounded border border-slate-800 text-cyan-300 whitespace-pre-wrap text-[10px]">
+                    {JSON.stringify(JSON.parse(selectedCandidate.raw_headers_json), null, 2)}
+                  </pre>
+                </div>
+              )}
+            </div>
+
+            <div className="p-4 border-t border-slate-800 bg-slate-950/40 flex items-center justify-between text-xs text-slate-400">
+              <span>Candidate ID: {selectedCandidate.id}</span>
+              <button
+                onClick={() => setSelectedCandidate(null)}
+                className="px-3 py-1.5 text-xs text-white bg-slate-800 hover:bg-slate-700 rounded transition-colors"
+              >
+                Close Diagnostics
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};

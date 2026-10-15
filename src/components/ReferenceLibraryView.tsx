@@ -1,9 +1,10 @@
 /**
  * Argus Anti-Piracy Intelligence & Evidence Platform
  * Stage A — Reference Content Registration & Fingerprint Library
+ * Equipped with Scalable Chunked Upload Architecture (bypassing 32MB proxy limits)
  */
 
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { 
   Film, 
   Upload, 
@@ -15,16 +16,24 @@ import {
   FileVideo,
   Loader2,
   Copy,
-  Check
+  Check,
+  CheckCircle2
 } from 'lucide-react';
 import { ReferenceItem } from '../types/client.js';
-import { fetchReferenceDetails, registerReference } from '../api.js';
+import { 
+  fetchReferenceDetails, 
+  registerReference, 
+  fetchUploadConfig, 
+  uploadChunkedVideoReference,
+  UploadConfig,
+  UploadProgress 
+} from '../api.js';
 
 interface ReferenceLibraryViewProps {
   references: ReferenceItem[];
   onRefresh: () => void;
   onDelete: (id: string) => void;
-  onRegisterUpload?: (formData: FormData) => Promise<ReferenceItem | any>;
+  onRegisterUpload?: (formData: FormData, onProgress?: (p: UploadProgress) => void) => Promise<ReferenceItem | any>;
   onRegisterUrl?: (payload: any) => Promise<ReferenceItem | any>;
   isRegisterModalOpen: boolean;
   onCloseRegisterModal: () => void;
@@ -46,6 +55,16 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
   const [filterType, setFilterType] = useState<string>('ALL');
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
+  // Upload configuration
+  const [uploadConfig, setUploadConfig] = useState<UploadConfig>({
+    maxUploadSizeMB: 500,
+    maxUploadSizeBytes: 500 * 1024 * 1024,
+    uploadChunkSizeMB: 5,
+    chunkSizeBytes: 5 * 1024 * 1024,
+    allowedExtensions: ['.mp4', '.mkv', '.mov', '.webm', '.avi', '.ts', '.m4v'],
+    mode: 'chunked'
+  });
+
   // Register Modal Form state
   const [mode, setMode] = useState<'upload' | 'url'>('upload');
   const [title, setTitle] = useState('');
@@ -57,6 +76,13 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
   const [file, setFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [uploadProgress, setUploadProgress] = useState<UploadProgress | null>(null);
+
+  useEffect(() => {
+    fetchUploadConfig().then(cfg => {
+      if (cfg) setUploadConfig(cfg);
+    }).catch(err => console.warn('Using default upload config:', err));
+  }, []);
 
   const handleOpenDetails = async (ref: ReferenceItem) => {
     setIsLoadingDetails(true);
@@ -81,6 +107,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
     e.preventDefault();
     setSubmitError(null);
     setIsSubmitting(true);
+    setUploadProgress(null);
 
     try {
       let createdItem: ReferenceItem | null = null;
@@ -89,51 +116,49 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
         if (!file) {
           throw new Error('Please select a video file to upload (MP4, MKV, MOV, WebM)');
         }
-        // 2. FIX: Construct a FormData object with exact field names
-        const formData = new FormData();
-        formData.append('title', title);
-        formData.append('rightsHolder', rightsHolder);
-        formData.append('assetType', assetType);
-        formData.append('auditNotes', auditNotes);
-        formData.append('sampleInterval', sampleInterval);
-        formData.append('file', file); // key name MUST match multer upload.single('file')
 
-        // Additional compatibility aliases
-        formData.append('rights_holder', rightsHolder);
-        formData.append('asset_type', assetType);
-        formData.append('notes', auditNotes);
-        formData.append('sample_interval_sec', sampleInterval);
-
-        // Pass formData directly to registerReference(formData)
-        if (onRegisterUpload) {
-          const res = await onRegisterUpload(formData);
-          createdItem = res && res.id ? res : (res && res.data ? res.data : null);
-        } else {
-          const res = await registerReference(formData);
-          createdItem = res && res.id ? res : (res && res.data ? res.data : null);
+        if (file.size > uploadConfig.maxUploadSizeBytes) {
+          throw new Error(
+            `File size (${(file.size / (1024 * 1024)).toFixed(2)} MB) exceeds maximum allowed limit of ${uploadConfig.maxUploadSizeMB} MB`
+          );
         }
+
+        // Use direct chunked video upload pipeline to bypass 32MB reverse-proxy limits
+        createdItem = await uploadChunkedVideoReference(
+          file,
+          {
+            title: title.trim(),
+            rightsHolder: rightsHolder.trim(),
+            assetType,
+            sampleInterval,
+            auditNotes: auditNotes.trim() || undefined
+          },
+          (progress) => {
+            setUploadProgress(progress);
+          }
+        );
       } else {
         if (!sourceUrl || !sourceUrl.trim()) {
           throw new Error('Please enter a valid media stream or video source URL');
         }
         const payload = {
-          title,
-          rightsHolder,
-          rights_holder: rightsHolder,
+          title: title.trim(),
+          rightsHolder: rightsHolder.trim(),
+          rights_holder: rightsHolder.trim(),
           assetType,
           asset_type: assetType,
           sourceUrl: sourceUrl.trim(),
           source_url: sourceUrl.trim(),
           sampleInterval: parseFloat(sampleInterval),
           sample_interval_sec: parseFloat(sampleInterval),
-          auditNotes,
-          notes: auditNotes
+          auditNotes: auditNotes.trim() || undefined,
+          notes: auditNotes.trim() || undefined
         };
         if (onRegisterUrl) {
-          const res = await onRegisterUrl(payload);
+          const res: any = await onRegisterUrl(payload);
           createdItem = res && res.id ? res : (res && res.data ? res.data : null);
         } else {
-          const res = await registerReference(payload);
+          const res: any = await registerReference(payload);
           createdItem = res && res.id ? res : (res && res.data ? res.data : null);
         }
       }
@@ -144,6 +169,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
       setSourceUrl('');
       setFile(null);
       setAuditNotes('');
+      setUploadProgress(null);
       onCloseRegisterModal();
       onRefresh();
 
@@ -180,9 +206,9 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
               <button
                 key={type}
                 onClick={() => setFilterType(type)}
-                className={`px-2.5 py-1 text-xs font-mono transition-colors rounded cursor-pointer ${
+                className={`px-2.5 py-1 text-xs font-medium rounded transition-colors cursor-pointer ${
                   filterType === type 
-                    ? 'bg-slate-800 text-white font-medium shadow-sm' 
+                    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-500/30' 
                     : 'text-slate-400 hover:text-slate-200'
                 }`}
               >
@@ -193,112 +219,134 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
 
           <button
             onClick={onOpenRegisterModal}
-            className="px-3.5 py-1.5 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded font-sans transition-colors cursor-pointer"
+            className="px-3 py-1.5 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 active:bg-cyan-500 rounded font-sans transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-sm shadow-cyan-950"
           >
-            Register Reference
+            <Upload className="w-3.5 h-3.5" />
+            <span>Register Reference Ground Truth</span>
           </button>
         </div>
       </div>
 
-      {/* Reference Library Table / Cards */}
+      {/* References Grid / Cards */}
       {filteredReferences.length === 0 ? (
-        <div className="p-12 text-center rounded-lg border border-dashed border-slate-800 bg-slate-900/20 space-y-3">
-          <Film className="w-10 h-10 text-slate-600 mx-auto" />
-          <div className="text-sm font-medium text-slate-300">No reference media registered yet</div>
-          <p className="text-xs text-slate-400 max-w-md mx-auto">
-            Upload reference video footage (up to 500MB) or register a media stream URL to extract 64-bit dHash fingerprints for candidate matching.
+        <div className="p-12 text-center border border-dashed border-slate-800 rounded-lg bg-slate-900/30">
+          <Film className="w-10 h-10 text-slate-600 mx-auto mb-3" />
+          <h3 className="text-sm font-semibold text-slate-300">No reference media registered</h3>
+          <p className="text-xs text-slate-400 mt-1 max-w-md mx-auto">
+            Upload reference video masters (.mp4, .mkv, .mov) or connect authorized stream URLs to generate ground-truth perceptual fingerprints.
           </p>
           <button
             onClick={onOpenRegisterModal}
-            className="px-4 py-2 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded transition-colors cursor-pointer"
+            className="mt-4 px-3 py-1.5 text-xs font-medium text-cyan-400 bg-cyan-950/60 border border-cyan-800/60 rounded hover:bg-cyan-900/40 transition-colors cursor-pointer inline-flex items-center gap-1.5"
           >
-            Register First Reference
+            <Upload className="w-3.5 h-3.5" />
+            <span>Register First Reference</span>
           </button>
         </div>
       ) : (
-        <div className="grid grid-cols-1 gap-4">
-          {filteredReferences.map((ref) => (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+          {filteredReferences.map(ref => (
             <div 
               key={ref.id}
-              className="p-5 rounded-lg bg-slate-900/50 border border-slate-800/80 hover:border-slate-700/80 transition-all flex flex-col md:flex-row md:items-center justify-between gap-5"
+              className="group bg-slate-900/80 border border-slate-800/80 hover:border-slate-700 rounded-lg overflow-hidden transition-all flex flex-col"
             >
-              <div className="flex items-start gap-4">
-                {/* Thumbnail or fallback */}
-                <div className="w-28 h-18 rounded bg-slate-950 border border-slate-800 overflow-hidden shrink-0 flex items-center justify-center relative">
-                  {ref.thumbnail_url ? (
-                    <img 
-                      src={ref.thumbnail_url} 
-                      alt={ref.title}
-                      className="w-full h-full object-cover" 
-                      referrerPolicy="no-referrer"
-                    />
-                  ) : (
-                    <FileVideo className="w-6 h-6 text-slate-600" />
-                  )}
-                  <span className="absolute bottom-1 right-1 bg-black/80 px-1 py-0.2 text-[9px] font-mono text-slate-300 rounded">
-                    {Math.floor(ref.duration_sec / 60)}:{(ref.duration_sec % 60).toString().padStart(2, '0')}
+              {/* Thumbnail Header with Metadata Overlay */}
+              <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden border-b border-slate-800/60">
+                {ref.first_thumbnail ? (
+                  <img 
+                    src={ref.first_thumbnail} 
+                    alt={ref.title} 
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                  />
+                ) : (
+                  <div className="text-slate-700 flex flex-col items-center gap-1">
+                    <FileVideo className="w-8 h-8" />
+                    <span className="text-[10px] uppercase font-mono">Perceptual Keyframe</span>
+                  </div>
+                )}
+                
+                <div className="absolute top-2 left-2">
+                  <span className="px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase bg-slate-950/80 backdrop-blur-md text-cyan-300 border border-cyan-500/30 rounded">
+                    {ref.asset_type.replace('_', ' ')}
                   </span>
                 </div>
 
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2">
-                    <h3 className="text-sm font-semibold text-white">{ref.title}</h3>
-                    <span className="text-slate-600">·</span>
-                    <span className="text-xs text-cyan-400 font-mono">{ref.asset_type}</span>
-                  </div>
+                <div className="absolute top-2 right-2">
+                  <span className="px-2 py-0.5 text-[10px] font-mono bg-slate-950/80 backdrop-blur-md text-slate-300 border border-slate-800 rounded">
+                    {ref.resolution || '1080p'} • {ref.fps ? `${ref.fps} fps` : '24 fps'}
+                  </span>
+                </div>
 
-                  {/* Clean unboxed metadata with · separators */}
-                  <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
-                    <span>Rights Holder: <strong className="text-slate-300 font-normal">{ref.rights_holder}</strong></span>
-                    <span className="text-slate-700">·</span>
-                    <span className="font-mono">{ref.resolution}</span>
-                    <span className="text-slate-700">·</span>
-                    <span className="font-mono">{ref.fps} fps</span>
-                    <span className="text-slate-700">·</span>
-                    <span className="font-mono">{ref.codec}</span>
-                    <span className="text-slate-700">·</span>
-                    <span className="text-emerald-400 font-mono font-medium">{ref.fingerprint_count} Keyframe Hashes</span>
-                  </div>
-
-                  <div className="text-[11px] font-mono text-slate-400 truncate max-w-lg">
-                    Provenance SHA-256: {ref.provenance_sha256}
-                  </div>
+                <div className="absolute bottom-2 right-2">
+                  <span className="px-2 py-0.5 text-[10px] font-mono bg-cyan-950/90 text-cyan-300 border border-cyan-800/80 rounded flex items-center gap-1">
+                    <Film className="w-2.5 h-2.5" />
+                    {ref.fingerprint_count || 0} Keyframe Hashes
+                  </span>
                 </div>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  onClick={() => handleOpenDetails(ref)}
-                  className="px-3 py-1.5 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Eye className="w-3.5 h-3.5" />
-                  <span>Inspect Keyframe Hashes</span>
-                </button>
-                <button
-                  onClick={() => onDelete(ref.id)}
-                  title="Delete reference"
-                  className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/30 rounded border border-transparent hover:border-rose-900/40 transition-colors cursor-pointer"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+              {/* Body */}
+              <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                <div>
+                  <h3 className="text-sm font-semibold text-white truncate" title={ref.title}>
+                    {ref.title}
+                  </h3>
+                  <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
+                    <span>{ref.rights_holder}</span>
+                    <span>•</span>
+                    <span className="font-mono">{ref.source_type}</span>
+                  </div>
+                </div>
+
+                {/* Provenance Hash */}
+                <div className="p-2 bg-slate-950/60 border border-slate-800/60 rounded text-[11px] font-mono space-y-1">
+                  <div className="text-slate-400 text-[10px] uppercase flex items-center justify-between">
+                    <span>Cryptographic Provenance</span>
+                    <span className="text-emerald-400">SHA-256</span>
+                  </div>
+                  <div className="text-slate-300 truncate" title={ref.provenance_sha256}>
+                    {ref.provenance_sha256 || 'Calculated during keyframe extraction'}
+                  </div>
+                </div>
+
+                {/* Actions */}
+                <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between">
+                  <button
+                    onClick={() => handleOpenDetails(ref)}
+                    className="px-2.5 py-1 text-xs text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/40 border border-cyan-800/40 rounded transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                  >
+                    <Eye className="w-3.5 h-3.5" />
+                    <span>Inspect Keyframes</span>
+                  </button>
+
+                  <button
+                    onClick={() => onDelete(ref.id)}
+                    className="p-1 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                    title="Delete reference"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
           ))}
         </div>
       )}
 
-      {/* Frame Fingerprints Inspection Drawer / Modal */}
+      {/* Drawer: Perceptual Keyframe Timeline Inspector */}
       {selectedRef && (
-        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-lg max-w-4xl w-full max-h-[85vh] flex flex-col shadow-2xl">
-            <div className="p-4 border-b border-slate-800 flex items-center justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-white">
-                  Temporal Fingerprint Sequence — {selectedRef.title}
-                </h3>
-                <p className="text-xs text-slate-400 font-mono mt-0.5">
-                  64-bit dHash perceptual values and visual thumbnails extracted across temporal timeline
-                </p>
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex justify-end">
+          <div className="w-full max-w-2xl bg-slate-900 border-l border-slate-800 h-full flex flex-col shadow-2xl">
+            {/* Drawer Header */}
+            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
+              <div className="space-y-0.5">
+                <div className="flex items-center gap-2">
+                  <Film className="w-4 h-4 text-cyan-400" />
+                  <h2 className="text-sm font-semibold text-white truncate max-w-md">{selectedRef.title}</h2>
+                </div>
+                <div className="text-xs text-slate-400 font-mono">
+                  ID: {selectedRef.id} • {selectedRef.rights_holder} • {selectedRef.resolution}
+                </div>
               </div>
               <button 
                 onClick={() => setSelectedRef(null)}
@@ -308,45 +356,61 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
               </button>
             </div>
 
-            <div className="p-6 overflow-y-auto space-y-4 flex-1">
+            {/* Keyframe Timeline List */}
+            <div className="flex-1 overflow-y-auto p-4 space-y-4">
+              <div className="p-3 bg-cyan-950/20 border border-cyan-800/40 rounded text-xs text-slate-300">
+                <div className="font-semibold text-cyan-300 mb-1">Perceptual Frame Fingerprint Sequence</div>
+                <p className="text-slate-400 text-[11px] leading-relaxed">
+                  Extracted at calibrated intervals. Each 64-bit dHash string captures spatial gradients invariant to re-encoding, resolution downscaling, and minor color variations.
+                </p>
+              </div>
+
               {isLoadingDetails ? (
-                <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-400 text-xs font-mono">
-                  <Loader2 className="w-5 h-5 text-cyan-400 animate-spin" />
-                  <span>Loading perceptual frame hashes from database...</span>
+                <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-400 text-xs">
+                  <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
+                  <span>Loading frame hashes and visual thumbnails...</span>
                 </div>
               ) : selectedRef.fingerprints && selectedRef.fingerprints.length > 0 ? (
-                <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                  {selectedRef.fingerprints.map((fp) => (
-                    <div key={fp.id} className="p-3 bg-slate-950/70 border border-slate-800 rounded space-y-2">
-                      <div className="aspect-video bg-slate-900 rounded overflow-hidden flex items-center justify-center relative border border-slate-800/60">
+                <div className="space-y-3">
+                  {selectedRef.fingerprints.map((fp, idx) => (
+                    <div 
+                      key={fp.id || idx}
+                      className="flex items-center gap-4 p-3 bg-slate-950 border border-slate-800 rounded-lg hover:border-slate-700 transition-colors"
+                    >
+                      {/* Frame Thumbnail */}
+                      <div className="w-28 h-16 bg-slate-900 rounded overflow-hidden shrink-0 border border-slate-800 relative">
                         {fp.thumbnail_data ? (
                           <img 
                             src={fp.thumbnail_data} 
-                            alt={`Frame ${fp.frame_index}`}
+                            alt={`Frame @ ${fp.timestamp_sec}s`}
                             className="w-full h-full object-cover" 
-                            referrerPolicy="no-referrer"
                           />
                         ) : (
-                          <span className="text-[10px] text-slate-400 font-mono">Frame #{fp.frame_index}</span>
+                          <div className="w-full h-full flex items-center justify-center text-slate-700">
+                            <Film className="w-5 h-5" />
+                          </div>
                         )}
-                        <span className="absolute bottom-1 right-1 bg-black/80 px-1 text-[9px] font-mono text-cyan-400 rounded">
+                        <span className="absolute bottom-1 right-1 px-1 py-0.2 bg-black/80 font-mono text-[9px] text-slate-300 rounded">
                           {fp.timestamp_sec.toFixed(1)}s
                         </span>
                       </div>
 
-                      <div className="space-y-1">
-                        <div className="flex items-center justify-between text-[11px] font-mono text-slate-400">
-                          <span>Frame #{fp.frame_index}</span>
-                          <span>Lum: {fp.avg_luminance}</span>
+                      {/* Fingerprint Data */}
+                      <div className="flex-1 min-w-0 space-y-1">
+                        <div className="flex items-center justify-between text-xs">
+                          <span className="font-medium text-slate-200">Frame #{fp.frame_index ?? idx}</span>
+                          <span className="text-[11px] text-slate-400 font-mono">t = {fp.timestamp_sec}s</span>
                         </div>
-                        <div className="flex items-center justify-between gap-1 bg-slate-900 p-1.5 rounded border border-slate-800/80">
-                          <code className="text-[10px] font-mono text-cyan-300 break-all select-all">
+                        
+                        <div className="flex items-center gap-2 bg-slate-900/80 px-2.5 py-1 rounded border border-slate-800/80">
+                          <span className="text-[10px] uppercase text-cyan-400 font-mono shrink-0">dHash:</span>
+                          <span className="text-xs font-mono text-cyan-300 tracking-wider truncate selection:bg-cyan-900">
                             {fp.phash_hex}
-                          </code>
+                          </span>
                           <button
                             onClick={() => handleCopyHash(fp.phash_hex)}
-                            title="Copy 64-bit dHash"
-                            className="text-slate-400 hover:text-white p-0.5 shrink-0 cursor-pointer"
+                            className="ml-auto text-slate-400 hover:text-white p-0.5 cursor-pointer shrink-0"
+                            title="Copy 64-bit hash"
                           >
                             {copiedHash === fp.phash_hex ? (
                               <Check className="w-3 h-3 text-emerald-400" />
@@ -478,13 +542,26 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
 
               {mode === 'upload' ? (
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-300">Select Video File (MP4, MKV, MOV up to 500MB)</label>
+                  <div className="flex items-center justify-between">
+                    <label className="text-xs font-medium text-slate-300">Select Video File (.mp4, .mkv, .mov up to {uploadConfig.maxUploadSizeMB}MB)</label>
+                    <span className="text-[10px] text-cyan-400 font-mono">
+                      Safe {uploadConfig.uploadChunkSizeMB}MB Chunks
+                    </span>
+                  </div>
                   <div className="border border-dashed border-slate-800 rounded-lg p-4 bg-slate-950/40 text-center hover:border-slate-700 transition-colors">
                     <input
                       type="file"
-                      accept="video/*,.mp4,.mkv,.mov,.webm"
+                      accept="video/*,.mp4,.mkv,.mov,.webm,.avi,.ts,.m4v"
                       disabled={isSubmitting}
-                      onChange={(e) => setFile(e.target.files?.[0] || null)}
+                      onChange={(e) => {
+                        const f = e.target.files?.[0] || null;
+                        setFile(f);
+                        if (f && f.size > uploadConfig.maxUploadSizeBytes) {
+                          setSubmitError(`Selected file exceeds maximum limit of ${uploadConfig.maxUploadSizeMB} MB`);
+                        } else {
+                          setSubmitError(null);
+                        }
+                      }}
                       className="hidden"
                       id="video-upload-input"
                     />
@@ -494,7 +571,13 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                         {file ? file.name : 'Click to select reference video file'}
                       </div>
                       <div className="text-[10px] text-slate-400 font-mono">
-                        {file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` : 'FFmpeg will probe codecs and extract frame hashes (up to 500MB)'}
+                        {file ? (
+                          <span className="text-cyan-400">
+                            {(file.size / (1024 * 1024)).toFixed(2)} MB • {Math.ceil(file.size / uploadConfig.chunkSizeBytes)} chunks
+                          </span>
+                        ) : (
+                          `Automatic chunked streaming bypasses reverse proxy limits (up to ${uploadConfig.maxUploadSizeMB}MB)`
+                        )}
                       </div>
                     </label>
                   </div>
@@ -542,17 +625,43 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                 </div>
               </div>
 
-              {/* In-flight Processing Banner */}
+              {/* In-flight Processing Banner with Progress Bar */}
               {isSubmitting && (
-                <div className="p-3 bg-cyan-950/30 border border-cyan-800/60 rounded flex items-center gap-3">
-                  <Loader2 className="w-5 h-5 text-cyan-400 animate-spin shrink-0" />
-                  <div className="space-y-0.5">
-                    <div className="text-xs font-medium text-cyan-200">
-                      Extracting Keyframes &amp; Calculating Perceptual Hashes...
+                <div className="p-3 bg-cyan-950/30 border border-cyan-800/60 rounded space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <Loader2 className="w-4 h-4 text-cyan-400 animate-spin shrink-0" />
+                      <span className="text-xs font-medium text-cyan-200">
+                        {uploadProgress?.phase === 'uploading' 
+                          ? `Uploading chunk ${uploadProgress.currentChunk} of ${uploadProgress.totalChunks}`
+                          : uploadProgress?.phase === 'assembling'
+                          ? 'Assembling chunks and verifying integrity...'
+                          : uploadProgress?.phase === 'fingerprinting'
+                          ? 'Extracting keyframes & computing 64-bit dHash...'
+                          : 'Processing reference media...'}
+                      </span>
                     </div>
-                    <div className="text-[11px] text-cyan-400/80 font-mono">
-                      Running temporal sampling, probe metrics, and 64-bit dHash computation
+                    {uploadProgress && (
+                      <span className="text-xs font-mono text-cyan-300">
+                        {uploadProgress.percent.toFixed(1)}%
+                      </span>
+                    )}
+                  </div>
+
+                  {/* Progress Bar */}
+                  {uploadProgress && (
+                    <div className="w-full bg-slate-900 rounded-full h-1.5 overflow-hidden">
+                      <div 
+                        className="bg-cyan-400 h-full transition-all duration-300"
+                        style={{ width: `${uploadProgress.percent}%` }}
+                      />
                     </div>
+                  )}
+
+                  <div className="text-[11px] text-cyan-400/80 font-mono">
+                    {uploadProgress?.phase === 'uploading'
+                      ? `${(uploadProgress.uploadedBytes / (1024 * 1024)).toFixed(1)} MB / ${(uploadProgress.totalBytes / (1024 * 1024)).toFixed(1)} MB transmitted in safe 5MB chunks`
+                      : 'Running temporal sampling, codec probing, and 64-bit dHash computation'}
                   </div>
                 </div>
               )}
@@ -568,11 +677,17 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                 </button>
                 <button
                   type="submit"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || (file !== null && file.size > uploadConfig.maxUploadSizeBytes)}
                   className="px-4 py-1.5 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 active:bg-cyan-500 rounded font-sans transition-colors disabled:opacity-50 cursor-pointer inline-flex items-center gap-1.5"
                 >
                   {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
-                  <span>{isSubmitting ? 'Extracting Keyframes & Calculating Perceptual Hashes...' : 'Register & Fingerprint'}</span>
+                  <span>
+                    {isSubmitting 
+                      ? (uploadProgress?.phase === 'uploading' 
+                          ? `Uploading (${uploadProgress?.percent.toFixed(0)}%)...` 
+                          : 'Processing Keyframes...') 
+                      : 'Register & Fingerprint'}
+                  </span>
                 </button>
               </div>
             </form>

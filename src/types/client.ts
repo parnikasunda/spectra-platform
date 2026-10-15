@@ -1,5 +1,5 @@
 /**
- * Argus Anti-Piracy Intelligence & Evidence Platform
+ * Argus / SPECTRA Anti-Piracy Intelligence & Evidence Platform
  * Client-side Type Definitions
  */
 
@@ -13,11 +13,36 @@ export type PipelineStatus =
   | 'ANALYZED'
   | 'UNREACHABLE'
   | 'DRM_PROTECTED'
+  | 'BLOCKED'
+  | 'UNSUPPORTED'
+  | 'REQUIRES_AUTHENTICATION'
+  | 'RATE_LIMITED'
+  | 'AWAITING_REVIEW'
   | 'INVALID_MEDIA';
 
 export type ReviewDecision = 'PENDING' | 'CONFIRMED' | 'FALSE_POSITIVE' | 'AUTHORIZED_LICENSEE';
 
-export type DiscoveryProvider = 'SEARCH_CRAWLER' | 'STREAM_INDEXER' | 'IPTV_PROBER' | 'SPORTS_DIRECTORY';
+export type DiscoveryProvider = 
+  | 'ALL_SOURCES'
+  | 'YOUTUBE_PUBLIC'
+  | 'SUSPECTED_PIRACY'
+  | 'STREAMING_SERVICES'
+  | 'PUBLIC_PLATFORMS'
+  | 'SEARCH_CRAWLER'
+  | 'STREAM_INDEXER'
+  | 'IPTV_PROBER'
+  | 'SPORTS_DIRECTORY';
+
+export type MatchClassification = 
+  | 'FULL_COPY'
+  | 'PARTIAL_REUSE'
+  | 'EDITED_CLIP'
+  | 'POTENTIAL_MATCH'
+  | 'NO_MATCH'
+  | 'UNCERTAIN_MATCH'
+  | 'CONFIRMED_INFRINGEMENT'
+  | 'AUTHORIZED_LICENSEE'
+  | 'FALSE_POSITIVE';
 
 export interface ReferenceItem {
   id: string;
@@ -32,6 +57,7 @@ export interface ReferenceItem {
   source_url?: string;
   file_path?: string;
   thumbnail_url?: string;
+  first_thumbnail?: string;
   created_at: string;
   status: 'REGISTERED' | 'PROCESSING' | 'FAILED' | 'ARCHIVED';
   provenance_sha256: string;
@@ -47,8 +73,20 @@ export interface FrameFingerprint {
   timestamp_sec: number;
   frame_index: number;
   phash_hex: string;
-  avg_luminance: number;
+  avg_luminance?: number;
   thumbnail_data?: string;
+  created_at: string;
+}
+
+export interface AudioFingerprint {
+  id: string;
+  reference_id?: string;
+  candidate_id?: string;
+  timestamp_sec: number;
+  frame_index: number;
+  audio_phash_hex: string;
+  rms_energy: number;
+  spectral_peaks: number;
   created_at: string;
 }
 
@@ -73,14 +111,17 @@ export interface CandidateItem {
   domain: string;
   discovered_title: string;
   discovery_provider: DiscoveryProvider;
+  source_category?: 'YOUTUBE' | 'STREAMING_SERVICE' | 'SUSPECTED_PIRACY' | 'PUBLIC_PLATFORM' | 'EMBEDDED_PLAYER' | 'DIRECT_STREAM' | 'OTHER';
+  asset_kind?: 'DISCOVERED_PAGE' | 'VERIFIED_VIDEO_ASSET';
   discovered_at: string;
   pipeline_status: PipelineStatus;
   reachability_code: number;
   reachability_latency_ms: number;
-  media_type: 'HLS_M3U8' | 'MP4' | 'WEBM' | 'HTML_PLAYER' | 'UNKNOWN';
+  media_type: 'HLS_M3U8' | 'MP4' | 'WEBM' | 'HTML_PLAYER' | 'DASH_MPD' | 'UNKNOWN';
   media_resolution?: string;
   media_duration_sec?: number;
   is_live_stream: boolean;
+  drm_scheme?: string;
   raw_headers_json?: string;
   verification_logs?: string;
   last_inspected_at?: string;
@@ -97,6 +138,14 @@ export interface MatchedKeyframePair {
   candidate_thumbnail?: string;
 }
 
+export interface AudioMatchMetrics {
+  has_audio: boolean;
+  audio_fingerprint_supported: boolean;
+  audio_similarity_pct: number;
+  matched_duration_sec: number;
+  audio_hash_sample?: string;
+}
+
 export interface EvidenceRecord {
   id: string;
   candidate_id: string;
@@ -106,6 +155,7 @@ export interface EvidenceRecord {
   reference_title: string;
   rights_holder: string;
   match_status: 'POTENTIAL_MATCH' | 'NO_MATCH' | 'CONFIRMED_INFRINGEMENT' | 'AUTHORIZED_LICENSEE' | 'FALSE_POSITIVE';
+  match_classification?: MatchClassification;
   confidence_score: number;
   min_hamming_dist: number;
   avg_hamming_dist: number;
@@ -113,6 +163,7 @@ export interface EvidenceRecord {
   total_compared_frames: number;
   temporal_offset_sec: number;
   sample_pairs: MatchedKeyframePair[];
+  audio_match?: AudioMatchMetrics;
   chain_of_custody_sha256: string;
   reviewed_by?: string;
   review_decision: ReviewDecision;

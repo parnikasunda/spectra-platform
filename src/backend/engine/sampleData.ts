@@ -486,6 +486,7 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     reference_title: ref1.title,
     rights_holder: ref1.rights_holder,
     match_status: 'NO_MATCH',
+    match_classification: 'NO_MATCH',
     confidence_score: comp4.confidenceScore,
     min_hamming_dist: comp4.minHammingDist,
     avg_hamming_dist: comp4.avgHammingDist,
@@ -499,8 +500,469 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   };
   db.insertEvidenceRecord(ev4);
 
+  // -------------------------------------------------------------
+  // Reference 3: Taylor Swift — Patient Zero (Universal Multi-Source Test Work)
+  // -------------------------------------------------------------
+  const ref3Id = 'ref_taylor_swift_patient_zero';
+  const ref3: ReferenceItem = {
+    id: ref3Id,
+    title: 'Taylor Swift — Patient Zero',
+    rights_holder: 'Universal Music Group / Republic Records / Taylor Swift Productions',
+    asset_type: 'VOD_FEATURE',
+    duration_sec: 285,
+    resolution: '3840x2160 (4K UHD)',
+    fps: 24.0,
+    codec: 'h265 / aac 48kHz',
+    source_type: 'FORENSIC_SAMPLE',
+    source_url: 'https://secure-vault.republicrecords.com/masters/taylor_swift_patient_zero_4k.mp4',
+    thumbnail_url: createThumbnailSvg('Taylor Swift', 'Patient Zero (Official Master)', '#4a044e', '#f472b6', '00:01:14'),
+    created_at: now,
+    status: 'REGISTERED',
+    provenance_sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+    fingerprint_count: 6,
+    notes: 'Official ground-truth master for Taylor Swift — Patient Zero with 64-bit dHash perceptual matrix and 8kHz acoustic spectrum.'
+  };
+  db.insertReference(ref3);
+
+  const ref3Fingerprints: FrameFingerprint[] = [
+    {
+      id: 'rfp_ts_0',
+      reference_id: ref3Id,
+      timestamp_sec: 0,
+      frame_index: 0,
+      phash_hex: 'a8b8c8d8e8f80818',
+      avg_luminance: 92.4,
+      thumbnail_data: createThumbnailSvg('Patient Zero Title Card', 'Opening Scene / Master', '#4a044e', '#f472b6', '00:00:00'),
+      created_at: now
+    },
+    {
+      id: 'rfp_ts_1',
+      reference_id: ref3Id,
+      timestamp_sec: 2,
+      frame_index: 1,
+      phash_hex: 'a8b8c8d8e8f80828',
+      avg_luminance: 95.1,
+      thumbnail_data: createThumbnailSvg('Clinical Laboratory Set', 'Verse 1 / Master', '#4a044e', '#f472b6', '00:00:02'),
+      created_at: now
+    },
+    {
+      id: 'rfp_ts_2',
+      reference_id: ref3Id,
+      timestamp_sec: 4,
+      frame_index: 2,
+      phash_hex: 'b8b8d8d8e8f81828',
+      avg_luminance: 104.2,
+      thumbnail_data: createThumbnailSvg('Neon Quarantine Chamber', 'Chorus 1 / Master', '#4a044e', '#f472b6', '00:00:04'),
+      created_at: now
+    },
+    {
+      id: 'rfp_ts_3',
+      reference_id: ref3Id,
+      timestamp_sec: 6,
+      frame_index: 3,
+      phash_hex: 'b8c8d8e8f8f81838',
+      avg_luminance: 110.8,
+      thumbnail_data: createThumbnailSvg('Shattered Glass Visuals', 'Bridge / Master', '#4a044e', '#f472b6', '00:00:06'),
+      created_at: now
+    },
+    {
+      id: 'rfp_ts_4',
+      reference_id: ref3Id,
+      timestamp_sec: 8,
+      frame_index: 4,
+      phash_hex: 'c8d8e8f8f8f82848',
+      avg_luminance: 98.7,
+      thumbnail_data: createThumbnailSvg('Taylor Swift Solo Profile', 'Outro / Master', '#4a044e', '#f472b6', '00:00:08'),
+      created_at: now
+    },
+    {
+      id: 'rfp_ts_5',
+      reference_id: ref3Id,
+      timestamp_sec: 10,
+      frame_index: 5,
+      phash_hex: 'd8e8f8f8f8f83858',
+      avg_luminance: 84.5,
+      thumbnail_data: createThumbnailSvg('Fade to Black / Credits', 'End Sequence / Master', '#4a044e', '#f472b6', '00:00:10'),
+      created_at: now
+    }
+  ];
+  db.insertReferenceFingerprints(ref3Fingerprints);
+
+  // -------------------------------------------------------------
+  // Multi-Source Candidates for Taylor Swift — Patient Zero
+  // -------------------------------------------------------------
+  const tsJobId = 'job_sweep_taylor_swift_patient_zero';
+  const tsJob: DiscoveryJob = {
+    id: tsJobId,
+    name: 'Multi-Source Investigation: Taylor Swift — Patient Zero',
+    target_reference_id: ref3Id,
+    provider: 'ALL_SOURCES',
+    query_params: JSON.stringify({ keywords: 'Taylor Swift Patient Zero full video stream leak' }),
+    status: 'COMPLETED',
+    candidates_found: 9,
+    started_at: new Date(Date.now() - 1800000).toISOString(),
+    completed_at: new Date(Date.now() - 1750000).toISOString()
+  };
+  db.insertDiscoveryJob(tsJob);
+
+  // 1. YouTube Candidate (Infringing Full Copy Upload)
+  const candTsYtId = 'cand_ts_youtube_leak';
+  const candTsYt: CandidateItem = {
+    id: candTsYtId,
+    job_id: tsJobId,
+    reference_id: ref3Id,
+    source_url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
+    domain: 'youtube.com',
+    discovered_title: 'Taylor Swift — Patient Zero (Leaked Music Video HD)',
+    discovery_provider: 'YOUTUBE_PUBLIC',
+    source_category: 'YOUTUBE',
+    asset_kind: 'DISCOVERED_PAGE',
+    discovered_at: new Date(Date.now() - 1700000).toISOString(),
+    pipeline_status: 'ANALYZED',
+    reachability_code: 200,
+    reachability_latency_ms: 110.4,
+    media_type: 'HTML_PLAYER',
+    media_resolution: '1920x1080',
+    media_duration_sec: 285,
+    is_live_stream: false,
+    raw_headers_json: JSON.stringify({ 'content-type': 'text/html; charset=utf-8', 'server': 'YouTube' }),
+    verification_logs: '[YouTubeAdapter] oEmbed verified: 200 OK (110ms). Public accessible video container.\n[Analysis] Perceptual dHash matched: 6/6 frames aligned. Audio similarity: 96.5% acoustic match. Classification: FULL_COPY.',
+    last_inspected_at: new Date(Date.now() - 600000).toISOString()
+  };
+  db.upsertCandidate(candTsYt);
+
+  const candTsYtFps: FrameFingerprint[] = [
+    { id: 'cfp_ts_yt_0', candidate_id: candTsYtId, timestamp_sec: 0, frame_index: 0, phash_hex: 'a8b8c8d8e8f80819', thumbnail_data: createThumbnailSvg('Patient Zero Title', 'youtube.com', '#4a044e', '#f472b6', '00:00:00'), created_at: now },
+    { id: 'cfp_ts_yt_1', candidate_id: candTsYtId, timestamp_sec: 2, frame_index: 1, phash_hex: 'a8b8c8d8e8f80829', thumbnail_data: createThumbnailSvg('Clinical Lab Set', 'youtube.com', '#4a044e', '#f472b6', '00:00:02'), created_at: now },
+    { id: 'cfp_ts_yt_2', candidate_id: candTsYtId, timestamp_sec: 4, frame_index: 2, phash_hex: 'b8b8d8d8e8f81829', thumbnail_data: createThumbnailSvg('Neon Quarantine', 'youtube.com', '#4a044e', '#f472b6', '00:00:04'), created_at: now },
+    { id: 'cfp_ts_yt_3', candidate_id: candTsYtId, timestamp_sec: 6, frame_index: 3, phash_hex: 'b8c8d8e8f8f81839', thumbnail_data: createThumbnailSvg('Shattered Glass', 'youtube.com', '#4a044e', '#f472b6', '00:00:06'), created_at: now },
+    { id: 'cfp_ts_yt_4', candidate_id: candTsYtId, timestamp_sec: 8, frame_index: 4, phash_hex: 'c8d8e8f8f8f82849', thumbnail_data: createThumbnailSvg('Solo Profile', 'youtube.com', '#4a044e', '#f472b6', '00:00:08'), created_at: now },
+    { id: 'cfp_ts_yt_5', candidate_id: candTsYtId, timestamp_sec: 10, frame_index: 5, phash_hex: 'd8e8f8f8f8f83859', thumbnail_data: createThumbnailSvg('Credits Roll', 'youtube.com', '#4a044e', '#f472b6', '00:00:10'), created_at: now }
+  ];
+  db.insertCandidateFingerprints(candTsYtFps);
+
+  const compTsYt = FingerprintEngine.compareFingerprintSequences(candTsYtFps, ref3Fingerprints);
+  const sealTsYt = FingerprintEngine.generateCustodySeal({
+    candidateUrl: candTsYt.source_url,
+    referenceId: ref3Id,
+    confidenceScore: compTsYt.confidenceScore,
+    minHammingDist: compTsYt.minHammingDist,
+    temporalOffsetSec: compTsYt.temporalOffsetSec,
+    samplePairs: compTsYt.samplePairs
+  });
+
+  const evTsYt: EvidenceRecord = {
+    id: 'ev_ts_youtube_fullcopy',
+    candidate_id: candTsYtId,
+    reference_id: ref3Id,
+    candidate_url: candTsYt.source_url,
+    candidate_domain: candTsYt.domain,
+    reference_title: ref3.title,
+    rights_holder: ref3.rights_holder,
+    match_status: 'POTENTIAL_MATCH',
+    match_classification: 'FULL_COPY',
+    confidence_score: 0.965,
+    min_hamming_dist: 1,
+    avg_hamming_dist: 1.2,
+    matched_frames_count: 6,
+    total_compared_frames: 6,
+    temporal_offset_sec: 0.0,
+    sample_pairs: compTsYt.samplePairs,
+    audio_match: {
+      has_audio: true,
+      audio_fingerprint_supported: true,
+      audio_similarity_pct: 98.4,
+      matched_duration_sec: 12.0,
+      audio_hash_sample: 'a8b8c8d8e8f80818'
+    },
+    chain_of_custody_sha256: sealTsYt,
+    review_decision: 'CONFIRMED',
+    reviewed_by: 'Senior Investigator Sarah Connor',
+    review_notes: 'Unauthorized re-upload on YouTube with intact master audio & video. Issue immediate DMCA takedown.',
+    reviewed_at: new Date(Date.now() - 300000).toISOString(),
+    created_at: now
+  };
+  db.insertEvidenceRecord(evTsYt);
+
+  // 2. Netflix Catalog Entry (DRM Protected)
+  const candTsNetflix: CandidateItem = {
+    id: 'cand_ts_netflix',
+    job_id: tsJobId,
+    reference_id: ref3Id,
+    source_url: 'https://www.netflix.com/title/81442199',
+    domain: 'netflix.com',
+    discovered_title: 'Taylor Swift: Patient Zero — Official Netflix Catalog Entry',
+    discovery_provider: 'STREAMING_SERVICES',
+    source_category: 'STREAMING_SERVICE',
+    asset_kind: 'DISCOVERED_PAGE',
+    discovered_at: new Date(Date.now() - 1700000).toISOString(),
+    pipeline_status: 'DRM_PROTECTED',
+    reachability_code: 200,
+    reachability_latency_ms: 125.2,
+    media_type: 'DASH_MPD',
+    media_resolution: '3840x2160',
+    drm_scheme: 'Widevine Modular CENC / FairPlay Streaming',
+    is_live_stream: false,
+    raw_headers_json: JSON.stringify({ 'server': 'Netflix-Edge', 'x-drm-protection': 'Widevine-Modular' }),
+    verification_logs: '[StreamingServicesAdapter] Netflix title cataloged.\n[Security Analysis] Detected Encrypted Media Extensions (EME) with Widevine Modular DRM.\n[Access Control] Subscriber login and CDM hardware license key required.\n[Compliance Guarantee] Technical DRM bypass is prohibited. Refused unauthorized stream acquisition.',
+    last_inspected_at: new Date(Date.now() - 500000).toISOString()
+  };
+  db.upsertCandidate(candTsNetflix);
+
+  // 3. Disney+ Hotstar Entry (DRM Protected)
+  const candTsHotstar: CandidateItem = {
+    id: 'cand_ts_hotstar',
+    job_id: tsJobId,
+    reference_id: ref3Id,
+    source_url: 'https://www.hotstar.com/movies/taylor-swift-patient-zero/1260084321',
+    domain: 'hotstar.com',
+    discovered_title: 'Taylor Swift — Patient Zero — Disney+ Hotstar Premier Watch Page',
+    discovery_provider: 'STREAMING_SERVICES',
+    source_category: 'STREAMING_SERVICE',
+    asset_kind: 'DISCOVERED_PAGE',
+    discovered_at: new Date(Date.now() - 1700000).toISOString(),
+    pipeline_status: 'DRM_PROTECTED',
+    reachability_code: 200,
+    reachability_latency_ms: 98.7,
+    media_type: 'DASH_MPD',
+    drm_scheme: 'Widevine L1 / PlayReady SL3000',
+    is_live_stream: false,
+    raw_headers_json: JSON.stringify({ 'server': 'AkamaiGHost', 'x-drm-protection': 'Widevine-L1' }),
+    verification_logs: '[StreamingServicesAdapter] Disney+ Hotstar catalog page probed.\n[Security Analysis] Widevine L1 & PlayReady SL3000 detected.\n[Compliance] Hardware decryption license required; stream cannot be acquired without credentials.',
+    last_inspected_at: new Date(Date.now() - 500000).toISOString()
+  };
+  db.upsertCandidate(candTsHotstar);
+
+  // 4. Suspected Piracy Streaming Portal (Soap2Day Mirror)
+  const candTsSoap: CandidateItem = {
+    id: 'cand_ts_soap2day',
+    job_id: tsJobId,
+    reference_id: ref3Id,
+    source_url: 'https://soap2day-mirror.org/movie/taylor-swift-patient-zero-2026-free-hd',
+    domain: 'soap2day-mirror.org',
+    discovered_title: 'Taylor Swift Patient Zero Full Video (Free Stream 1080p)',
+    discovery_provider: 'SUSPECTED_PIRACY',
+    source_category: 'SUSPECTED_PIRACY',
+    asset_kind: 'DISCOVERED_PAGE',
+    discovered_at: new Date(Date.now() - 1700000).toISOString(),
+    pipeline_status: 'ANALYZED',
+    reachability_code: 200,
+    reachability_latency_ms: 88.2,
+    media_type: 'HTML_PLAYER',
+    media_resolution: '1920x1080',
+    is_live_stream: false,
+    raw_headers_json: JSON.stringify({ 'server': 'nginx-piracy-edge', 'access-control-allow-origin': '*' }),
+    verification_logs: '[SuspectedPiracyAdapter] Embedded player container extracted.\n[Acquisition] Keyframes extracted via player proxy.\n[Matching] Matched 5/6 frames with +8s delay. Classification: FULL_COPY.',
+    last_inspected_at: new Date(Date.now() - 400000).toISOString()
+  };
+  db.upsertCandidate(candTsSoap);
+
+  const candTsSoapFps: FrameFingerprint[] = [
+    { id: 'cfp_ts_soap_0', candidate_id: 'cand_ts_soap2day', timestamp_sec: 8, frame_index: 0, phash_hex: 'a8b8c8d8e8f8081a', thumbnail_data: createThumbnailSvg('Title Card Stream', 'soap2day-mirror.org', '#4a044e', '#f472b6', '00:00:08'), created_at: now },
+    { id: 'cfp_ts_soap_1', candidate_id: 'cand_ts_soap2day', timestamp_sec: 10, frame_index: 1, phash_hex: 'a8b8c8d8e8f8082a', thumbnail_data: createThumbnailSvg('Lab Set Stream', 'soap2day-mirror.org', '#4a044e', '#f472b6', '00:00:10'), created_at: now },
+    { id: 'cfp_ts_soap_2', candidate_id: 'cand_ts_soap2day', timestamp_sec: 12, frame_index: 2, phash_hex: 'b8b8d8d8e8f8182a', thumbnail_data: createThumbnailSvg('Quarantine Stream', 'soap2day-mirror.org', '#4a044e', '#f472b6', '00:00:12'), created_at: now },
+    { id: 'cfp_ts_soap_3', candidate_id: 'cand_ts_soap2day', timestamp_sec: 14, frame_index: 3, phash_hex: 'b8c8d8e8f8f8183a', thumbnail_data: createThumbnailSvg('Glass Visual Stream', 'soap2day-mirror.org', '#4a044e', '#f472b6', '00:00:14'), created_at: now },
+    { id: 'cfp_ts_soap_4', candidate_id: 'cand_ts_soap2day', timestamp_sec: 16, frame_index: 4, phash_hex: 'c8d8e8f8f8f8284a', thumbnail_data: createThumbnailSvg('Solo Profile Stream', 'soap2day-mirror.org', '#4a044e', '#f472b6', '00:00:16'), created_at: now }
+  ];
+  db.insertCandidateFingerprints(candTsSoapFps);
+
+  const compTsSoap = FingerprintEngine.compareFingerprintSequences(candTsSoapFps, ref3Fingerprints);
+  const sealTsSoap = FingerprintEngine.generateCustodySeal({
+    candidateUrl: candTsSoap.source_url,
+    referenceId: ref3Id,
+    confidenceScore: compTsSoap.confidenceScore,
+    minHammingDist: compTsSoap.minHammingDist,
+    temporalOffsetSec: compTsSoap.temporalOffsetSec,
+    samplePairs: compTsSoap.samplePairs
+  });
+
+  const evTsSoap: EvidenceRecord = {
+    id: 'ev_ts_soap2day_fullcopy',
+    candidate_id: 'cand_ts_soap2day',
+    reference_id: ref3Id,
+    candidate_url: candTsSoap.source_url,
+    candidate_domain: candTsSoap.domain,
+    reference_title: ref3.title,
+    rights_holder: ref3.rights_holder,
+    match_status: 'POTENTIAL_MATCH',
+    match_classification: 'FULL_COPY',
+    confidence_score: 0.942,
+    min_hamming_dist: 2,
+    avg_hamming_dist: 2.1,
+    matched_frames_count: 5,
+    total_compared_frames: 5,
+    temporal_offset_sec: 8.0,
+    sample_pairs: compTsSoap.samplePairs,
+    audio_match: {
+      has_audio: true,
+      audio_fingerprint_supported: true,
+      audio_similarity_pct: 94.8,
+      matched_duration_sec: 10.0,
+      audio_hash_sample: 'a8b8c8d8e8f8081a'
+    },
+    chain_of_custody_sha256: sealTsSoap,
+    review_decision: 'CONFIRMED',
+    reviewed_by: 'Senior Investigator Sarah Connor',
+    review_notes: 'Commercial piracy portal distributing unauthorized high-definition stream. Automated DMCA notice generated.',
+    reviewed_at: new Date(Date.now() - 250000).toISOString(),
+    created_at: now
+  };
+  db.insertEvidenceRecord(evTsSoap);
+
+  // 5. Suspected Cyberlocker MP4 (StreamTape)
+  const candTsStreamtape: CandidateItem = {
+    id: 'cand_ts_streamtape',
+    job_id: tsJobId,
+    reference_id: ref3Id,
+    source_url: 'https://streamtape.com/v/9bZkp7q1/taylor_swift_patient_zero_cam_rip.mp4',
+    domain: 'streamtape.com',
+    discovered_title: 'Taylor Swift Patient Zero Cam Rip (StreamTape Cyberlocker)',
+    discovery_provider: 'SUSPECTED_PIRACY',
+    source_category: 'SUSPECTED_PIRACY',
+    asset_kind: 'VERIFIED_VIDEO_ASSET',
+    discovered_at: new Date(Date.now() - 1700000).toISOString(),
+    pipeline_status: 'ANALYZED',
+    reachability_code: 200,
+    reachability_latency_ms: 105.1,
+    media_type: 'MP4',
+    media_resolution: '1280x720',
+    is_live_stream: false,
+    verification_logs: '[SuspectedPiracyAdapter] Direct cyberlocker MP4 file reachable.\n[Analysis] Perceptual matching confirmed partial scene reuse (chorus clip). Classification: PARTIAL_REUSE.',
+    last_inspected_at: new Date(Date.now() - 350000).toISOString()
+  };
+  db.upsertCandidate(candTsStreamtape);
+
+  // 6. Public Video Archive (Archive.org)
+  const candTsArchive: CandidateItem = {
+    id: 'cand_ts_archive_org',
+    job_id: tsJobId,
+    reference_id: ref3Id,
+    source_url: 'https://archive.org/details/taylor_swift_patient_zero_open_archive',
+    domain: 'archive.org',
+    discovered_title: 'Taylor Swift Patient Zero — Open Preservation Archive',
+    discovery_provider: 'PUBLIC_PLATFORMS',
+    source_category: 'PUBLIC_PLATFORM',
+    asset_kind: 'DISCOVERED_PAGE',
+    discovered_at: new Date(Date.now() - 1700000).toISOString(),
+    pipeline_status: 'ANALYZED',
+    reachability_code: 200,
+    reachability_latency_ms: 76.5,
+    media_type: 'MP4',
+    media_resolution: '1280x720',
+    is_live_stream: false,
+    verification_logs: '[PublicVideoAdapter] Open video archive repository inspected.\n[Analysis] Modified frame clip detected. Classification: EDITED_CLIP.',
+    last_inspected_at: new Date(Date.now() - 300000).toISOString()
+  };
+  db.upsertCandidate(candTsArchive);
+
+  // 7. Embedded Player Gateway (VidSrc)
+  const candTsVidSrc: CandidateItem = {
+    id: 'cand_ts_vidsrc_embed',
+    job_id: tsJobId,
+    reference_id: ref3Id,
+    source_url: 'https://vidsrc.me/embed/taylor-swift-patient-zero/v1',
+    domain: 'vidsrc.me',
+    discovered_title: 'VidSrc Embedded Player Gateway (Patient Zero)',
+    discovery_provider: 'SUSPECTED_PIRACY',
+    source_category: 'EMBEDDED_PLAYER',
+    asset_kind: 'DISCOVERED_PAGE',
+    discovered_at: new Date(Date.now() - 1700000).toISOString(),
+    pipeline_status: 'MEDIA_DETECTED',
+    reachability_code: 200,
+    reachability_latency_ms: 94.2,
+    media_type: 'HTML_PLAYER',
+    is_live_stream: false,
+    verification_logs: '[SuspectedPiracyAdapter] Embedded player iframe identified. Direct stream extraction available.',
+    last_inspected_at: new Date(Date.now() - 250000).toISOString()
+  };
+  db.upsertCandidate(candTsVidSrc);
+
+  // 8. Cloudflare Anti-Bot Blocked Mirror (FMovies)
+  const candTsBlocked: CandidateItem = {
+    id: 'cand_ts_fmovies_blocked',
+    job_id: tsJobId,
+    reference_id: ref3Id,
+    source_url: 'https://fmovies-free.to/film/taylor-swift-patient-zero/cf-blocked',
+    domain: 'fmovies-free.to',
+    discovered_title: 'FMovies Mirror (Cloudflare Protected)',
+    discovery_provider: 'SUSPECTED_PIRACY',
+    source_category: 'SUSPECTED_PIRACY',
+    asset_kind: 'DISCOVERED_PAGE',
+    discovered_at: new Date(Date.now() - 1700000).toISOString(),
+    pipeline_status: 'BLOCKED',
+    reachability_code: 403,
+    reachability_latency_ms: 142.0,
+    media_type: 'HTML_PLAYER',
+    is_live_stream: false,
+    verification_logs: '[Verification] Cloudflare Turnstile CAPTCHA detected (HTTP 403). Headless bot acquisition blocked. Status: BLOCKED.',
+    last_inspected_at: new Date(Date.now() - 200000).toISOString()
+  };
+  db.upsertCandidate(candTsBlocked);
+
+  // 9. Expired Dead Link (LookMovie)
+  const candTsDead: CandidateItem = {
+    id: 'cand_ts_lookmovie_dead',
+    job_id: tsJobId,
+    reference_id: ref3Id,
+    source_url: 'https://lookmovie2.to/watch/taylor-swift-patient-zero-404-dead',
+    domain: 'lookmovie2.to',
+    discovered_title: 'LookMovie Mirror 3 (Expired Link)',
+    discovery_provider: 'SUSPECTED_PIRACY',
+    source_category: 'SUSPECTED_PIRACY',
+    asset_kind: 'DISCOVERED_PAGE',
+    discovered_at: new Date(Date.now() - 1700000).toISOString(),
+    pipeline_status: 'UNREACHABLE',
+    reachability_code: 404,
+    reachability_latency_ms: 215.3,
+    media_type: 'UNKNOWN',
+    is_live_stream: false,
+    verification_logs: '[Verification] Target host returned HTTP 404 Not Found. Stream mirror deleted or expired.',
+    last_inspected_at: new Date(Date.now() - 150000).toISOString()
+  };
+  db.upsertCandidate(candTsDead);
+
   return {
-    loadedReferences: 2,
-    loadedCandidates: 4
+    loadedReferences: 3,
+    loadedCandidates: 13
   };
 }
+
+/**
+ * Ensures Taylor Swift — Patient Zero is permanently registered in the database.
+ */
+export function ensureTaylorSwiftPatientZeroRegistered(): void {
+  const existing = db.getReferenceById('ref_taylor_swift_patient_zero');
+  if (existing) return;
+
+  const now = new Date().toISOString();
+  const ref3: ReferenceItem = {
+    id: 'ref_taylor_swift_patient_zero',
+    title: 'Taylor Swift — Patient Zero',
+    rights_holder: 'Universal Music Group / Republic Records / Taylor Swift Productions',
+    asset_type: 'VOD_FEATURE',
+    duration_sec: 285,
+    resolution: '3840x2160 (4K UHD)',
+    fps: 24.0,
+    codec: 'h265 / aac 48kHz',
+    source_type: 'FORENSIC_SAMPLE',
+    source_url: 'https://secure-vault.republicrecords.com/masters/taylor_swift_patient_zero_4k.mp4',
+    thumbnail_url: createThumbnailSvg('Taylor Swift', 'Patient Zero (Official Master)', '#4a044e', '#f472b6', '00:01:14'),
+    created_at: now,
+    status: 'REGISTERED',
+    provenance_sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
+    fingerprint_count: 6,
+    notes: 'Official ground-truth master for Taylor Swift — Patient Zero with 64-bit dHash perceptual matrix and 8kHz acoustic spectrum.'
+  };
+  db.insertReference(ref3);
+
+  const fingerprints: FrameFingerprint[] = [
+    { id: 'rfp_ts_0', reference_id: 'ref_taylor_swift_patient_zero', timestamp_sec: 0, frame_index: 0, phash_hex: 'a8b8c8d8e8f80818', avg_luminance: 92.4, thumbnail_data: createThumbnailSvg('Patient Zero Title Card', 'Opening Scene / Master', '#4a044e', '#f472b6', '00:00:00'), created_at: now },
+    { id: 'rfp_ts_1', reference_id: 'ref_taylor_swift_patient_zero', timestamp_sec: 2, frame_index: 1, phash_hex: 'a8b8c8d8e8f80828', avg_luminance: 95.1, thumbnail_data: createThumbnailSvg('Clinical Laboratory Set', 'Verse 1 / Master', '#4a044e', '#f472b6', '00:00:02'), created_at: now },
+    { id: 'rfp_ts_2', reference_id: 'ref_taylor_swift_patient_zero', timestamp_sec: 4, frame_index: 2, phash_hex: 'b8b8d8d8e8f81828', avg_luminance: 104.2, thumbnail_data: createThumbnailSvg('Neon Quarantine Chamber', 'Chorus 1 / Master', '#4a044e', '#f472b6', '00:00:04'), created_at: now },
+    { id: 'rfp_ts_3', reference_id: 'ref_taylor_swift_patient_zero', timestamp_sec: 6, frame_index: 3, phash_hex: 'b8c8d8e8f8f81838', avg_luminance: 110.8, thumbnail_data: createThumbnailSvg('Shattered Glass Visuals', 'Bridge / Master', '#4a044e', '#f472b6', '00:00:06'), created_at: now },
+    { id: 'rfp_ts_4', reference_id: 'ref_taylor_swift_patient_zero', timestamp_sec: 8, frame_index: 4, phash_hex: 'c8d8e8f8f8f82848', avg_luminance: 98.7, thumbnail_data: createThumbnailSvg('Taylor Swift Solo Profile', 'Outro / Master', '#4a044e', '#f472b6', '00:00:08'), created_at: now },
+    { id: 'rfp_ts_5', reference_id: 'ref_taylor_swift_patient_zero', timestamp_sec: 10, frame_index: 5, phash_hex: 'd8e8f8f8f8f83858', avg_luminance: 84.5, thumbnail_data: createThumbnailSvg('Fade to Black / Credits', 'End Sequence / Master', '#4a044e', '#f472b6', '00:00:10'), created_at: now }
+  ];
+  db.insertReferenceFingerprints(fingerprints);
+}
+

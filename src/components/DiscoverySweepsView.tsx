@@ -43,7 +43,7 @@ export const DiscoverySweepsView: React.FC<DiscoverySweepsViewProps> = ({
 }) => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [jobName, setJobName] = useState('');
-  const [provider, setProvider] = useState<DiscoveryProvider>('SPORTS_DIRECTORY');
+  const [provider, setProvider] = useState<DiscoveryProvider>('ALL_SOURCES');
   const [targetReferenceId, setTargetReferenceId] = useState<string>('');
   const [keywords, setKeywords] = useState('');
   const [filterDomain, setFilterDomain] = useState('');
@@ -78,10 +78,35 @@ export const DiscoverySweepsView: React.FC<DiscoverySweepsViewProps> = ({
   };
 
   const providerDescriptions: Record<DiscoveryProvider, { title: string; desc: string; scope: string }> = {
-    SPORTS_DIRECTORY: {
-      title: 'Live Sports Indexer',
-      desc: 'Monitors public sports broadcast indexing portals and streaming gateways.',
-      scope: 'Configured public live event directories & HLS scrapers'
+    ALL_SOURCES: {
+      title: 'Universal Multi-Source Intelligence',
+      desc: 'Orchestrates modular discovery across YouTube, streaming catalogs, piracy portals, and public archives.',
+      scope: 'Universal: 20–30 genuine candidates across all adapters'
+    },
+    YOUTUBE_PUBLIC: {
+      title: 'YouTube Public & Embed Prober',
+      desc: 'Scrapes YouTube uploads, music videos, full concert leaks, shorts, and iframe embeds.',
+      scope: 'YouTube videos, channel feeds, and embedded player instances'
+    },
+    STREAMING_SERVICES: {
+      title: 'Commercial Streaming (Netflix / Hotstar)',
+      desc: 'Discovers catalog watch pages and conducts legal DRM & access control compliance probes.',
+      scope: 'Netflix, Disney+ Hotstar, and authorized SVOD platforms'
+    },
+    SUSPECTED_PIRACY: {
+      title: 'Suspected Piracy & Cyberlockers',
+      desc: 'Crawls high-risk streaming portals, direct HLS playlists, cyberlocker MP4s, and player embeds.',
+      scope: 'Soap2Day, StreamTape, FMovies, LookMovie, VidSrc embeds'
+    },
+    PUBLIC_PLATFORMS: {
+      title: 'Public Video Platforms & Archives',
+      desc: 'Discovers and acquires open media from digital public archives and video hosting portals.',
+      scope: 'Internet Archive (archive.org), Dailymotion, Vimeo'
+    },
+    SEARCH_CRAWLER: {
+      title: 'Search Index Crawler',
+      desc: 'Queries search engine APIs, blog forums, and arbitrary websites for content keywords.',
+      scope: 'Arbitrary public websites and search indexing feeds'
     },
     STREAM_INDEXER: {
       title: 'Web Stream Inspector',
@@ -93,10 +118,10 @@ export const DiscoverySweepsView: React.FC<DiscoverySweepsViewProps> = ({
       desc: 'Inspects open IPTV transport manifests and m3u streaming channels.',
       scope: 'Open IPTV broadcast endpoints and gateway relays'
     },
-    SEARCH_CRAWLER: {
-      title: 'Search Index Crawler',
-      desc: 'Queries search engine APIs and indexing feeds for content keywords.',
-      scope: 'Configured search indexing endpoints'
+    SPORTS_DIRECTORY: {
+      title: 'Live Sports Indexer',
+      desc: 'Monitors public sports broadcast indexing portals and streaming gateways.',
+      scope: 'Configured public live event directories & HLS scrapers'
     }
   };
 
@@ -263,10 +288,15 @@ export const DiscoverySweepsView: React.FC<DiscoverySweepsViewProps> = ({
                     onChange={(e) => setProvider(e.target.value as DiscoveryProvider)}
                     className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white focus:outline-none focus:border-cyan-400 font-mono"
                   >
-                    <option value="SPORTS_DIRECTORY">Live Sports Indexer</option>
+                    <option value="ALL_SOURCES">Universal Multi-Source (All Adapters)</option>
+                    <option value="YOUTUBE_PUBLIC">YouTube Videos & Embeds</option>
+                    <option value="STREAMING_SERVICES">Commercial Streaming (Netflix / Hotstar)</option>
+                    <option value="SUSPECTED_PIRACY">Suspected Piracy & Cyberlockers</option>
+                    <option value="PUBLIC_PLATFORMS">Public Video Archives (Archive.org / Dailymotion)</option>
+                    <option value="SEARCH_CRAWLER">Arbitrary Web Crawler</option>
                     <option value="STREAM_INDEXER">Web Stream Inspector</option>
+                    <option value="SPORTS_DIRECTORY">Live Sports Indexer</option>
                     <option value="IPTV_PROBER">IPTV Stream Prober</option>
-                    <option value="SEARCH_CRAWLER">Search API Crawler</option>
                   </select>
                 </div>
 

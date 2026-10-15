@@ -1,6 +1,6 @@
 /**
  * Argus Anti-Piracy Intelligence & Evidence Platform
- * Express API Router
+ * Express API Router with Scalable Large-Video Chunked Upload Architecture
  */
 
 import { Router, Request, Response, NextFunction } from 'express';
@@ -17,26 +17,50 @@ import { ReferenceItem, FrameFingerprint, CandidateItem } from './types.js';
 
 const router = Router();
 
-// Ensure uploads directory exists
+// Ensure upload and staging directories exist
 const uploadsDir = path.resolve(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
-// 3. CONFIGURE MULTER FOR /api/references (500MB limit with diskStorage in ./uploads/)
+const chunksStagingDir = path.resolve(uploadsDir, 'chunks_staging');
+if (!fs.existsSync(chunksStagingDir)) {
+  fs.mkdirSync(chunksStagingDir, { recursive: true });
+}
+
+// Configurable upload limits (from environment variables or standard defaults)
+const getMaxUploadSizeMB = () => process.env.MAX_UPLOAD_SIZE_MB ? parseInt(process.env.MAX_UPLOAD_SIZE_MB, 10) : 500;
+const getChunkSizeMB = () => process.env.UPLOAD_CHUNK_SIZE_MB ? parseInt(process.env.UPLOAD_CHUNK_SIZE_MB, 10) : 5;
+
+// Standard Multer diskStorage for direct /api/references file uploads (fallback)
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    if (!fs.existsSync('./uploads/')) {
-      fs.mkdirSync('./uploads/', { recursive: true });
-    }
-    cb(null, './uploads/');
+    cb(null, uploadsDir);
   },
-  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
+  filename: (_req, file, cb) => {
+    const cleanName = file.originalname.replace(/[^a-zA-Z0-9._-]/g, '_');
+    cb(null, `${Date.now()}-${cleanName}`);
+  }
 });
 
 const upload = multer({ 
   storage, 
-  limits: { fileSize: 500 * 1024 * 1024 } 
+  limits: { fileSize: getMaxUploadSizeMB() * 1024 * 1024 } 
+});
+
+// Multer for chunk uploads (each chunk is ~5MB, limit set to 20MB)
+const chunkStorage = multer.diskStorage({
+  destination: (_req, _file, cb) => {
+    cb(null, chunksStagingDir);
+  },
+  filename: (_req, _file, cb) => {
+    cb(null, `chunk_${Date.now()}_${Math.random().toString(36).substring(7)}`);
+  }
+});
+
+const chunkUpload = multer({
+  storage: chunkStorage,
+  limits: { fileSize: 25 * 1024 * 1024 }
 });
 
 // Middleware to safely handle multipart upload using upload.single('file') or pass through JSON
@@ -52,7 +76,6 @@ const handleUpload = (req: Request, res: Response, next: NextFunction) => {
       res.setHeader('Content-Type', 'application/json');
       return res.status(500).json({ error: err.message || 'File upload failed' });
     }
-    // If not found under 'file', try fallback to 'mediaFile' or any
     if (!req.file) {
       upload.any()(req, res, (err2: any) => {
         if (err2) {
@@ -69,6 +92,338 @@ const handleUpload = (req: Request, res: Response, next: NextFunction) => {
     next();
   });
 };
+
+// -------------------------------------------------------------
+// Large-File Resumable Chunked Upload In-Memory State
+// -------------------------------------------------------------
+interface UploadSession {
+  uploadId: string;
+  fileName: string;
+  fileSize: number;
+  totalChunks: number;
+  chunkSize: number;
+  title: string;
+  rightsHolder: string;
+  assetType: string;
+  sampleInterval: number;
+  auditNotes?: string;
+  tempDir: string;
+  receivedChunks: Set<number>;
+  createdAt: number;
+}
+
+const activeUploadSessions = new Map<string, UploadSession>();
+
+// Periodic session cleanup (sessions older than 2 hours)
+setInterval(() => {
+  const now = Date.now();
+  for (const [uploadId, session] of activeUploadSessions.entries()) {
+    if (now - session.createdAt > 2 * 60 * 60 * 1000) {
+      try {
+        if (fs.existsSync(session.tempDir)) {
+          fs.rmSync(session.tempDir, { recursive: true, force: true });
+        }
+      } catch (e) {
+        console.warn(`Failed to clean up stale upload session ${uploadId}:`, e);
+      }
+      activeUploadSessions.delete(uploadId);
+    }
+  }
+}, 30 * 60 * 1000);
+
+// -------------------------------------------------------------
+// Upload Configuration Endpoint (Stage A Configuration)
+// -------------------------------------------------------------
+router.get('/config/upload', (_req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json');
+  const maxMb = getMaxUploadSizeMB();
+  const chunkMb = getChunkSizeMB();
+  return res.json({
+    success: true,
+    data: {
+      maxUploadSizeMB: maxMb,
+      maxUploadSizeBytes: maxMb * 1024 * 1024,
+      uploadChunkSizeMB: chunkMb,
+      chunkSizeBytes: chunkMb * 1024 * 1024,
+      allowedExtensions: ['.mp4', '.mkv', '.mov', '.webm', '.avi', '.ts', '.m4v'],
+      mode: 'chunked'
+    }
+  });
+});
+
+// -------------------------------------------------------------
+// Chunked Upload Endpoints (Bypasses 32MB Serverless/Proxy Limits)
+// -------------------------------------------------------------
+
+/**
+ * 1. Initialize Large Video Upload
+ */
+router.post('/uploads/init', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const { 
+      fileName, 
+      fileSize, 
+      title, 
+      rightsHolder, 
+      assetType, 
+      sampleInterval, 
+      auditNotes 
+    } = req.body || {};
+
+    if (!fileName || typeof fileName !== 'string') {
+      return res.status(400).json({ error: 'Valid fileName is required' });
+    }
+    if (!fileSize || typeof fileSize !== 'number' || fileSize <= 0) {
+      return res.status(400).json({ error: 'Valid positive fileSize in bytes is required' });
+    }
+    if (!title || !String(title).trim()) {
+      return res.status(400).json({ error: 'Title is required for reference registration' });
+    }
+    if (!rightsHolder || !String(rightsHolder).trim()) {
+      return res.status(400).json({ error: 'Rights holder is required for legal chain of custody' });
+    }
+
+    const maxSizeBytes = getMaxUploadSizeMB() * 1024 * 1024;
+    if (fileSize > maxSizeBytes) {
+      return res.status(400).json({
+        error: `File size (${(fileSize / (1024 * 1024)).toFixed(2)} MB) exceeds maximum allowed limit of ${getMaxUploadSizeMB()} MB`
+      });
+    }
+
+    const chunkSize = getChunkSizeMB() * 1024 * 1024;
+    const totalChunks = Math.ceil(fileSize / chunkSize);
+    const uploadId = `upl_${Date.now()}_${crypto.randomBytes(4).toString('hex')}`;
+    const tempDir = path.resolve(chunksStagingDir, uploadId);
+
+    if (!fs.existsSync(tempDir)) {
+      fs.mkdirSync(tempDir, { recursive: true });
+    }
+
+    const session: UploadSession = {
+      uploadId,
+      fileName,
+      fileSize,
+      totalChunks,
+      chunkSize,
+      title: String(title).trim(),
+      rightsHolder: String(rightsHolder).trim(),
+      assetType: assetType || 'VOD_FEATURE',
+      sampleInterval: parseFloat(sampleInterval) || 2.0,
+      auditNotes: auditNotes ? String(auditNotes) : undefined,
+      tempDir,
+      receivedChunks: new Set<number>(),
+      createdAt: Date.now()
+    };
+
+    activeUploadSessions.set(uploadId, session);
+
+    return res.json({
+      success: true,
+      uploadId,
+      chunkSize,
+      totalChunks,
+      maxUploadSizeBytes: maxSizeBytes
+    });
+  } catch (err: any) {
+    console.error('[Upload Init Error]', err);
+    return res.status(500).json({ error: err.message || 'Failed to initialize upload session' });
+  }
+});
+
+/**
+ * 2. Upload Single Chunk (~5MB, safe for Cloud Run & all proxies)
+ */
+router.post('/uploads/chunk', chunkUpload.single('chunk'), (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const uploadId = req.body?.uploadId;
+    const chunkIndexStr = req.body?.chunkIndex;
+
+    if (!uploadId || !activeUploadSessions.has(uploadId)) {
+      return res.status(404).json({ error: 'Upload session not found or expired. Please re-initiate.' });
+    }
+
+    const session = activeUploadSessions.get(uploadId)!;
+    const chunkIndex = parseInt(chunkIndexStr, 10);
+
+    if (isNaN(chunkIndex) || chunkIndex < 0 || chunkIndex >= session.totalChunks) {
+      return res.status(400).json({ error: `Invalid chunk index: ${chunkIndexStr}` });
+    }
+
+    if (!req.file) {
+      return res.status(400).json({ error: 'Missing chunk binary payload' });
+    }
+
+    // Move uploaded chunk from staging to session directory
+    const targetChunkPath = path.resolve(session.tempDir, `chunk_${chunkIndex}`);
+    fs.renameSync(req.file.path, targetChunkPath);
+
+    session.receivedChunks.add(chunkIndex);
+
+    return res.json({
+      success: true,
+      uploadId,
+      chunkIndex,
+      receivedChunks: session.receivedChunks.size,
+      totalChunks: session.totalChunks
+    });
+  } catch (err: any) {
+    console.error('[Upload Chunk Error]', err);
+    return res.status(500).json({ error: err.message || 'Failed to process chunk' });
+  }
+});
+
+/**
+ * 3. Complete Upload & Trigger Processing Pipeline
+ */
+router.post('/uploads/complete', async (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const { uploadId } = req.body || {};
+    if (!uploadId || !activeUploadSessions.has(uploadId)) {
+      return res.status(404).json({ error: 'Upload session not found or expired' });
+    }
+
+    const session = activeUploadSessions.get(uploadId)!;
+
+    // Verify all chunks are accounted for
+    for (let i = 0; i < session.totalChunks; i++) {
+      const chunkPath = path.resolve(session.tempDir, `chunk_${i}`);
+      if (!fs.existsSync(chunkPath)) {
+        return res.status(400).json({ 
+          error: `Missing chunk ${i} of ${session.totalChunks}. Please resume or retry upload.` 
+        });
+      }
+    }
+
+    // Assemble file into final location in ./uploads/
+    const cleanFileName = session.fileName.replace(/[^a-zA-Z0-9._-]/g, '_');
+    const finalFilePath = path.resolve(uploadsDir, `${session.uploadId}-${cleanFileName}`);
+    const writeStream = fs.createWriteStream(finalFilePath);
+
+    for (let i = 0; i < session.totalChunks; i++) {
+      const chunkPath = path.resolve(session.tempDir, `chunk_${i}`);
+      const chunkBuffer = fs.readFileSync(chunkPath);
+      writeStream.write(chunkBuffer);
+    }
+    writeStream.end();
+
+    await new Promise<void>((resolve, reject) => {
+      writeStream.on('finish', () => resolve());
+      writeStream.on('error', (err) => reject(err));
+    });
+
+    // Verify assembled file size strictly against original file size (Never truncate!)
+    const fileStats = fs.statSync(finalFilePath);
+    if (fileStats.size !== session.fileSize) {
+      // Incomplete or corrupted assembly
+      try { fs.unlinkSync(finalFilePath); } catch {}
+      return res.status(400).json({
+        error: `Integrity check failed: expected ${session.fileSize} bytes, got ${fileStats.size} bytes.`
+      });
+    }
+
+    // Clean up temporary chunk files
+    try {
+      fs.rmSync(session.tempDir, { recursive: true, force: true });
+    } catch (e) {
+      console.warn('Failed to clean up chunk temp dir:', e);
+    }
+
+    // Compute cryptographic SHA-256 provenance hash using streaming
+    const provenanceHash = await new Promise<string>((resolve, reject) => {
+      const hash = crypto.createHash('sha256');
+      const stream = fs.createReadStream(finalFilePath);
+      stream.on('data', chunk => hash.update(chunk));
+      stream.on('end', () => resolve(hash.digest('hex')));
+      stream.on('error', err => reject(err));
+    });
+
+    const refId = `ref_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    const now = new Date().toISOString();
+
+    // Probe media attributes
+    const probe = await FingerprintEngine.probeVideo(finalFilePath);
+
+    const refItem: ReferenceItem = {
+      id: refId,
+      title: session.title,
+      rights_holder: session.rightsHolder,
+      asset_type: (session.assetType as any) || 'VOD_FEATURE',
+      duration_sec: probe.duration_sec,
+      resolution: `${probe.width}x${probe.height}`,
+      fps: probe.fps,
+      codec: probe.codec,
+      source_type: 'UPLOAD',
+      file_path: finalFilePath,
+      created_at: now,
+      status: 'PROCESSING',
+      provenance_sha256: provenanceHash,
+      fingerprint_count: 0,
+      notes: session.auditNotes
+    };
+
+    db.insertReference(refItem);
+
+    // Extract keyframes and compute perceptual dHash fingerprints
+    const extractedFrames = await FingerprintEngine.extractVideoFingerprints(finalFilePath, {
+      intervalSec: session.sampleInterval,
+      maxFrames: 30,
+      generateThumbnails: true,
+      title: session.title
+    });
+
+    const fps: FrameFingerprint[] = extractedFrames.map((f, idx) => ({
+      id: `rfp_${refId}_${idx}`,
+      reference_id: refId,
+      timestamp_sec: f.timestamp_sec,
+      frame_index: f.frame_index,
+      phash_hex: f.phash_hex,
+      avg_luminance: f.avg_luminance,
+      thumbnail_data: f.thumbnail_data,
+      created_at: now
+    }));
+
+    if (fps.length > 0) {
+      db.insertReferenceFingerprints(fps);
+      db.updateReferenceFingerprintCount(refId, fps.length, fps[0]?.thumbnail_data);
+    } else {
+      db.updateReferenceFingerprintCount(refId, 0);
+    }
+
+    // Clean up active session
+    activeUploadSessions.delete(uploadId);
+
+    const createdRef = db.getReferenceById(refId);
+    return res.status(201).json({
+      success: true,
+      data: createdRef,
+      fingerprintsExtracted: fps.length
+    });
+  } catch (err: any) {
+    console.error('[Upload Complete Error]', err);
+    return res.status(500).json({ error: err.message || 'Failed to complete upload and process fingerprints' });
+  }
+});
+
+/**
+ * 4. Cancel / Abort Upload Session
+ */
+router.delete('/uploads/:uploadId', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json');
+  const { uploadId } = req.params;
+  const session = activeUploadSessions.get(uploadId);
+  if (session) {
+    try {
+      if (fs.existsSync(session.tempDir)) {
+        fs.rmSync(session.tempDir, { recursive: true, force: true });
+      }
+    } catch {}
+    activeUploadSessions.delete(uploadId);
+  }
+  return res.json({ success: true, message: 'Upload session aborted and temporary chunks cleaned' });
+});
 
 // -------------------------------------------------------------
 // System Statistics
@@ -111,9 +466,9 @@ router.get('/references/:id', (req: Request, res: Response) => {
 });
 
 /**
- * Robust Reference Content Registration Handler:
+ * Direct / Stream URL Reference Registration Handler:
  * Strictly guarantees JSON output under all circumstances.
- * Accepts both multipart form uploads ('file') and JSON stream URLs.
+ * Accepts direct multipart form uploads ('file') or JSON stream URLs.
  */
 async function handleRegisterReference(req: Request, res: Response) {
   res.setHeader('Content-Type', 'application/json');
@@ -142,7 +497,7 @@ async function handleRegisterReference(req: Request, res: Response) {
     let provenanceHash = '';
 
     if (req.file) {
-      // Multipart File Upload Mode
+      // Direct Multipart File Upload Mode
       filePath = path.resolve(process.cwd(), req.file.path);
       sourceType = 'UPLOAD';
       try {
@@ -157,7 +512,7 @@ async function handleRegisterReference(req: Request, res: Response) {
         provenanceHash = crypto.createHash('sha256').update(`${req.file.originalname}_${req.file.size}_${Date.now()}`).digest('hex');
       }
     } else if (sourceUrl && String(sourceUrl).trim()) {
-      // Direct Stream URL Mode
+      // Direct Stream URL Mode (HLS .m3u8, MP4 link, web video)
       effectiveSourceUrl = String(sourceUrl).trim();
       sourceType = 'DIRECT_URL';
       provenanceHash = crypto.createHash('sha256').update(effectiveSourceUrl).digest('hex');
@@ -232,7 +587,7 @@ async function handleRegisterReference(req: Request, res: Response) {
   }
 }
 
-// Canonical endpoint: POST /api/references with upload.single('file')
+// Canonical endpoint: POST /api/references
 router.post('/references', handleUpload, handleRegisterReference);
 
 // Backward-compatibility aliases

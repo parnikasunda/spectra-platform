@@ -95,6 +95,8 @@ export class ArgusDatabase {
         domain TEXT NOT NULL,
         discovered_title TEXT NOT NULL,
         discovery_provider TEXT NOT NULL,
+        source_category TEXT,
+        asset_kind TEXT,
         discovered_at TEXT NOT NULL,
         pipeline_status TEXT NOT NULL,
         reachability_code INTEGER DEFAULT 0,
@@ -103,6 +105,7 @@ export class ArgusDatabase {
         media_resolution TEXT,
         media_duration_sec REAL,
         is_live_stream INTEGER DEFAULT 0,
+        drm_scheme TEXT,
         raw_headers_json TEXT,
         verification_logs TEXT,
         last_inspected_at TEXT,
@@ -135,6 +138,7 @@ export class ArgusDatabase {
         reference_title TEXT NOT NULL,
         rights_holder TEXT NOT NULL,
         match_status TEXT NOT NULL,
+        match_classification TEXT,
         confidence_score REAL NOT NULL,
         min_hamming_dist INTEGER NOT NULL,
         avg_hamming_dist REAL NOT NULL,
@@ -142,6 +146,7 @@ export class ArgusDatabase {
         total_compared_frames INTEGER NOT NULL,
         temporal_offset_sec REAL NOT NULL,
         sample_pairs_json TEXT NOT NULL,
+        audio_match_json TEXT,
         chain_of_custody_sha256 TEXT NOT NULL,
         reviewed_by TEXT,
         review_decision TEXT NOT NULL,
@@ -157,6 +162,13 @@ export class ArgusDatabase {
       CREATE INDEX IF NOT EXISTS idx_evidence_cand ON evidence_records(candidate_id);
       CREATE INDEX IF NOT EXISTS idx_evidence_ref ON evidence_records(reference_id);
     `);
+
+    // Safe schema migrations for existing databases
+    try { this.db.exec(`ALTER TABLE candidates ADD COLUMN source_category TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE candidates ADD COLUMN asset_kind TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE candidates ADD COLUMN drm_scheme TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE evidence_records ADD COLUMN match_classification TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE evidence_records ADD COLUMN audio_match_json TEXT`); } catch {}
   }
 
   // --- Reference Items ---
@@ -238,7 +250,7 @@ export class ArgusDatabase {
         fp.timestamp_sec,
         fp.frame_index,
         fp.phash_hex,
-        fp.avg_luminance,
+        fp.avg_luminance ?? 0,
         fp.thumbnail_data || null,
         fp.created_at
       );
@@ -343,11 +355,11 @@ export class ArgusDatabase {
     const stmt = this.db.prepare(`
       INSERT INTO candidates (
         id, job_id, reference_id, source_url, domain, discovered_title,
-        discovery_provider, discovered_at, pipeline_status, reachability_code,
+        discovery_provider, source_category, asset_kind, discovered_at, pipeline_status, reachability_code,
         reachability_latency_ms, media_type, media_resolution, media_duration_sec,
-        is_live_stream, raw_headers_json, verification_logs, last_inspected_at
+        is_live_stream, drm_scheme, raw_headers_json, verification_logs, last_inspected_at
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `);
     stmt.run(
@@ -358,6 +370,8 @@ export class ArgusDatabase {
       cand.domain,
       cand.discovered_title,
       cand.discovery_provider,
+      cand.source_category || null,
+      cand.asset_kind || null,
       cand.discovered_at,
       cand.pipeline_status,
       cand.reachability_code,
@@ -366,6 +380,7 @@ export class ArgusDatabase {
       cand.media_resolution || null,
       cand.media_duration_sec || null,
       cand.is_live_stream ? 1 : 0,
+      cand.drm_scheme || null,
       cand.raw_headers_json || null,
       cand.verification_logs || null,
       cand.last_inspected_at || null
@@ -407,6 +422,18 @@ export class ArgusDatabase {
     if (updates.is_live_stream !== undefined) {
       fields.push('is_live_stream = ?');
       values.push(updates.is_live_stream ? 1 : 0);
+    }
+    if (updates.source_category !== undefined) {
+      fields.push('source_category = ?');
+      values.push(updates.source_category);
+    }
+    if (updates.asset_kind !== undefined) {
+      fields.push('asset_kind = ?');
+      values.push(updates.asset_kind);
+    }
+    if (updates.drm_scheme !== undefined) {
+      fields.push('drm_scheme = ?');
+      values.push(updates.drm_scheme);
     }
     if (updates.raw_headers_json !== undefined) {
       fields.push('raw_headers_json = ?');
@@ -467,13 +494,13 @@ export class ArgusDatabase {
     const stmt = this.db.prepare(`
       INSERT INTO evidence_records (
         id, candidate_id, reference_id, candidate_url, candidate_domain,
-        reference_title, rights_holder, match_status, confidence_score,
+        reference_title, rights_holder, match_status, match_classification, confidence_score,
         min_hamming_dist, avg_hamming_dist, matched_frames_count, total_compared_frames,
-        temporal_offset_sec, sample_pairs_json, chain_of_custody_sha256,
+        temporal_offset_sec, sample_pairs_json, audio_match_json, chain_of_custody_sha256,
         reviewed_by, review_decision, review_notes, reviewed_at, takedown_generated_at,
         takedown_notice_text, created_at
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `);
     stmt.run(
@@ -485,21 +512,23 @@ export class ArgusDatabase {
       record.reference_title,
       record.rights_holder,
       record.match_status,
-      record.confidence_score,
-      record.min_hamming_dist,
-      record.avg_hamming_dist,
-      record.matched_frames_count,
-      record.total_compared_frames,
-      record.temporal_offset_sec,
-      JSON.stringify(record.sample_pairs),
-      record.chain_of_custody_sha256,
+      record.match_classification || null,
+      record.confidence_score ?? 0,
+      record.min_hamming_dist ?? 0,
+      record.avg_hamming_dist ?? 0,
+      record.matched_frames_count ?? 0,
+      record.total_compared_frames ?? 0,
+      record.temporal_offset_sec ?? (record as any).temporalOffsetSec ?? 0,
+      JSON.stringify(record.sample_pairs ?? (record as any).samplePairs ?? []),
+      record.audio_match ? JSON.stringify(record.audio_match) : ((record as any).audioMatch ? JSON.stringify((record as any).audioMatch) : null),
+      record.chain_of_custody_sha256 || '',
       record.reviewed_by || null,
-      record.review_decision,
+      record.review_decision || 'PENDING',
       record.review_notes || null,
       record.reviewed_at || null,
       record.takedown_generated_at || null,
       record.takedown_notice_text || null,
-      record.created_at
+      record.created_at || new Date().toISOString()
     );
   }
 
@@ -553,7 +582,8 @@ export class ArgusDatabase {
     const rows = (params.length ? stmt.all(...params) : stmt.all()) as any[];
     return rows.map(r => ({
       ...r,
-      sample_pairs: JSON.parse(r.sample_pairs_json || '[]')
+      sample_pairs: JSON.parse(r.sample_pairs_json || '[]'),
+      audio_match: r.audio_match_json ? JSON.parse(r.audio_match_json) : undefined
     }));
   }
 
@@ -563,7 +593,8 @@ export class ArgusDatabase {
     if (!row) return null;
     return {
       ...row,
-      sample_pairs: JSON.parse(row.sample_pairs_json || '[]')
+      sample_pairs: JSON.parse(row.sample_pairs_json || '[]'),
+      audio_match: row.audio_match_json ? JSON.parse(row.audio_match_json) : undefined
     };
   }
 

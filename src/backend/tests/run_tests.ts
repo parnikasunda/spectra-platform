@@ -16,6 +16,13 @@ import { DiscoveryEngine } from '../engine/discovery.js';
 import { db } from '../db/database.js';
 import { loadOptionalForensicTestSuite } from '../engine/sampleData.js';
 import { FrameFingerprint } from '../types.js';
+import { AdapterRegistry } from '../engine/adapters/index.js';
+import { VerifierEngine } from '../engine/verifier.js';
+import { YouTubeAdapter } from '../engine/adapters/youtube.js';
+import { StreamingServicesAdapter } from '../engine/adapters/streaming.js';
+import { SuspectedPiracyAdapter } from '../engine/adapters/suspected_piracy.js';
+import { PublicVideoPlatformsAdapter } from '../engine/adapters/public_video.js';
+import { WebCrawlerAdapter } from '../engine/adapters/web_crawler.js';
 
 let passedTests = 0;
 let failedTests = 0;
@@ -160,6 +167,85 @@ async function runTestSuite() {
   assert(stats.total_references >= 2, 'Stats: computed total references is accurate');
   assert(stats.total_candidates >= 4, 'Stats: computed total candidates is accurate');
   assert(stats.confirmed_infringements >= 1, 'Stats: computed confirmed infringements matches human review');
+
+  // -------------------------------------------------------------
+  // Test Group 5: Multi-Source Adapter Dispatch & DRM Compliance
+  // -------------------------------------------------------------
+  console.log('\n[Test Group 5] Multi-Source Adapter Dispatch & DRM Compliance');
+
+  const allAdapters = AdapterRegistry.getAllAdapters();
+  assert(allAdapters.length === 5, 'AdapterRegistry registers all 5 modular source adapters');
+
+  const ytAdapter = AdapterRegistry.getAdapterForUrl('https://www.youtube.com/watch?v=dQw4w9WgXcQ');
+  assert(ytAdapter instanceof YouTubeAdapter, 'Resolves YouTubeAdapter for youtube.com watch URLs');
+
+  const netflixAdapter = AdapterRegistry.getAdapterForUrl('https://www.netflix.com/title/81442199');
+  assert(netflixAdapter instanceof StreamingServicesAdapter, 'Resolves StreamingServicesAdapter for netflix.com URLs');
+
+  const hotstarAdapter = AdapterRegistry.getAdapterForUrl('https://www.hotstar.com/movies/patient-zero/1260084321');
+  assert(hotstarAdapter instanceof StreamingServicesAdapter, 'Resolves StreamingServicesAdapter for hotstar.com URLs');
+
+  const piracyAdapter = AdapterRegistry.getAdapterForUrl('https://soap2day-mirror.org/movie/test-leak-hd');
+  assert(piracyAdapter instanceof SuspectedPiracyAdapter, 'Resolves SuspectedPiracyAdapter for soap2day / embed domains');
+
+  const publicVideoAdapter = AdapterRegistry.getAdapterForUrl('https://archive.org/details/test_video_preservation');
+  assert(publicVideoAdapter instanceof PublicVideoPlatformsAdapter, 'Resolves PublicVideoPlatformsAdapter for archive.org');
+
+  const crawlerAdapter = AdapterRegistry.getAdapterForUrl('https://unknown-indie-cinema.org/watch');
+  assert(crawlerAdapter instanceof WebCrawlerAdapter, 'Resolves WebCrawlerAdapter as fallback for arbitrary public websites');
+
+  // Probe Netflix title: Must flag DRM_PROTECTED and refuse unauthorized circumvention
+  const streaming = new StreamingServicesAdapter();
+  const netflixProbe = await streaming.acquireAndProbe('https://www.netflix.com/title/81442199');
+  assert(netflixProbe.pipelineStatus === 'DRM_PROTECTED', 'Netflix catalog probed with pipelineStatus: DRM_PROTECTED');
+  assert(Boolean(netflixProbe.drmScheme?.includes('Widevine')), 'Detects Widevine Modular DRM protection scheme');
+  assert(netflixProbe.accessible === false, 'Compliance guarantee: prohibits unauthorized DRM circumvention');
+
+  // Probe Cloudflare blocked piracy host
+  const piracy = new SuspectedPiracyAdapter();
+  const blockedProbe = await piracy.acquireAndProbe('https://fmovies-free.to/film/test/cf-blocked');
+  assert(blockedProbe.pipelineStatus === 'BLOCKED', 'Detects Cloudflare Turnstile CAPTCHA wall (BLOCKED)');
+  assert(blockedProbe.httpStatus === 403, 'Records HTTP 403 status code for blocked host');
+
+  // Probe unencrypted direct HLS manifest from piracy gateway
+  const hlsProbe = await piracy.acquireAndProbe('https://superstream.tv/hls/live/test/master.m3u8');
+  assert(hlsProbe.pipelineStatus === 'ACQUIRED', 'Direct HLS manifest acquired successfully');
+  assert(hlsProbe.mediaType === 'HLS_M3U8', 'Direct stream identified as HLS_M3U8');
+
+  // -------------------------------------------------------------
+  // Test Group 6: Universal Multi-Source Discovery & Statutory Takedowns
+  // -------------------------------------------------------------
+  console.log('\n[Test Group 6] Universal Multi-Source Discovery & Statutory Takedowns');
+
+  // Multi-source discovery across all adapters: Discover 20-30 candidate URLs
+  const multiDiscovered = await AdapterRegistry.executeMultiSourceDiscovery('Taylor Swift Patient Zero', {
+    maxTotalCandidates: 28
+  });
+  assert(multiDiscovered.length >= 20, `Discovered ${multiDiscovered.length} genuine candidate URLs (target >= 20)`);
+
+  const categorySet = new Set(multiDiscovered.map(d => d.sourceCategory));
+  assert(categorySet.has('YOUTUBE'), 'Discovered candidate URLs from YouTube');
+  assert(categorySet.has('STREAMING_SERVICE'), 'Discovered candidate URLs from Streaming Services');
+  assert(categorySet.has('SUSPECTED_PIRACY') || categorySet.has('EMBEDDED_PLAYER'), 'Discovered candidate URLs from Suspected Piracy / Embeds');
+  assert(categorySet.has('PUBLIC_PLATFORM'), 'Discovered candidate URLs from Public Video Platforms');
+
+  // Deduplication check
+  const urlSet = new Set(multiDiscovered.map(d => d.url.toLowerCase()));
+  assert(urlSet.size === multiDiscovered.length, 'Deduplication guarantees all discovered URLs are unique');
+
+  // Asset kind distinction
+  const hasPages = multiDiscovered.some(d => d.assetKind === 'DISCOVERED_PAGE');
+  const hasAssets = multiDiscovered.some(d => d.assetKind === 'VERIFIED_VIDEO_ASSET');
+  assert(hasPages && hasAssets, 'Distinguishes discovered web pages from verified direct video assets');
+
+  // Statutory DMCA Takedown Notice generation
+  const takedownNotice = VerifierEngine.generateTakedownNotice(primaryEvidence);
+  assert(takedownNotice.includes('DIGITAL MILLENNIUM COPYRIGHT ACT'), 'Takedown notice includes statutory DMCA header');
+  assert(takedownNotice.includes(primaryEvidence.chain_of_custody_sha256), 'Takedown notice includes SHA-256 custody seal');
+  assert(takedownNotice.includes(primaryEvidence.reference_title), 'Takedown notice references copyrighted work title');
+  assert(takedownNotice.includes(primaryEvidence.candidate_url), 'Takedown notice specifies infringing candidate URL');
+  assert(takedownNotice.includes('penalty of perjury'), 'Takedown notice includes penalty of perjury statutory declaration');
+  assert(!takedownNotice.includes('NaN'), 'Confidence score is formatted cleanly without NaN');
 
   // -------------------------------------------------------------
   // Test Summary

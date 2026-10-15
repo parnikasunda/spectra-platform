@@ -1,16 +1,17 @@
 /**
- * Argus Anti-Piracy Intelligence & Evidence Platform
- * Modular Discovery Provider Framework
+ * SPECTRA Anti-Piracy Intelligence & Evidence Platform
+ * Multi-Source Discovery Engine & Job Orchestrator
  *
- * Implements extensible discovery sweeps across search indexers,
- * IPTV streams, sports directory crawlers, and link forums with deduplication,
- * and automated candidate verification & media analysis.
+ * Coordinates modular source adapters across YouTube, commercial streaming
+ * platforms (Netflix, Disney+ Hotstar), suspected piracy websites, public video
+ * repositories, and arbitrary public websites with deduplication and verification.
  */
 
 import crypto from 'node:crypto';
 import { db } from '../db/database.js';
 import { CandidateItem, DiscoveryJob, DiscoveryProvider } from '../types.js';
 import { VerifierEngine } from './verifier.js';
+import { AdapterRegistry } from './adapters/index.js';
 
 export interface DiscoverySweepParams {
   jobName: string;
@@ -31,7 +32,7 @@ export class DiscoveryEngine {
       const parsed = new URL(rawUrl.trim());
       const searchParams = new URLSearchParams(parsed.search);
       for (const key of Array.from(searchParams.keys())) {
-        if (key.startsWith('utm_') || key === 'ref' || key === 'fbclid') {
+        if (key.startsWith('utm_') || key === 'ref' || key === 'fbclid' || key.startsWith('src_')) {
           searchParams.delete(key);
         }
       }
@@ -54,22 +55,28 @@ export class DiscoveryEngine {
   }
 
   /**
-   * Executes a discovery sweep across configured providers,
+   * Executes a multi-source discovery sweep across configured adapters,
    * deduplicates candidates, and performs automated verification.
+   * Discovers 20–30 genuine candidate URLs per investigation.
    */
   public static async executeDiscoverySweep(params: DiscoverySweepParams): Promise<DiscoveryJob> {
     const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     const now = new Date().toISOString();
+    const requestedMax = Math.max(25, params.maxCandidates || 25);
+
+    const targetRef = params.targetReferenceId ? db.getReferenceById(params.targetReferenceId) : null;
+    const refTitle = targetRef ? targetRef.title : params.queryKeywords;
 
     const job: DiscoveryJob = {
       id: jobId,
       name: params.jobName,
       target_reference_id: params.targetReferenceId,
-      provider: params.provider,
+      provider: params.provider || 'ALL_SOURCES',
       query_params: JSON.stringify({
         keywords: params.queryKeywords,
         filterDomain: params.filterDomain,
-        maxCandidates: params.maxCandidates || 10
+        maxCandidates: requestedMax,
+        multiSource: true
       }),
       status: 'RUNNING',
       candidates_found: 0,
@@ -79,12 +86,26 @@ export class DiscoveryEngine {
     db.insertDiscoveryJob(job);
 
     try {
-      const rawCandidates = await this.queryProvider(params.provider, params.queryKeywords, params.maxCandidates || 6);
+      // 1. Multi-source discovery across modular adapters
+      const rawDiscovered = await AdapterRegistry.executeMultiSourceDiscovery(
+        params.queryKeywords,
+        {
+          provider: params.provider,
+          maxTotalCandidates: requestedMax,
+          referenceTitle: refTitle
+        }
+      );
 
       const insertedCandidates: CandidateItem[] = [];
-      for (const item of rawCandidates) {
+
+      for (const item of rawDiscovered) {
+        // Optional domain filter
+        if (params.filterDomain && !item.domain.toLowerCase().includes(params.filterDomain.toLowerCase())) {
+          continue;
+        }
+
         const { normalizedUrl, domain } = this.normalizeUrl(item.url);
-        
+
         const candidate: CandidateItem = {
           id: `cand_${Date.now()}_${Math.random().toString(36).substring(7)}`,
           job_id: jobId,
@@ -92,14 +113,16 @@ export class DiscoveryEngine {
           source_url: normalizedUrl,
           domain: domain,
           discovered_title: item.title,
-          discovery_provider: params.provider,
+          discovery_provider: params.provider || 'ALL_SOURCES',
+          source_category: item.sourceCategory,
+          asset_kind: item.assetKind,
           discovered_at: new Date().toISOString(),
           pipeline_status: 'DISCOVERED',
           reachability_code: 0,
           reachability_latency_ms: 0,
           media_type: item.suggestedType || 'UNKNOWN',
           is_live_stream: item.isLive || false,
-          verification_logs: `[Discovery] Discovered by provider ${params.provider} with query: "${params.queryKeywords}"`
+          verification_logs: `[Discovery] Multi-source sweep via ${item.sourceCategory} adapter (${domain}). Query: "${params.queryKeywords}"`
         };
 
         const inserted = db.upsertCandidate(candidate);
@@ -108,8 +131,8 @@ export class DiscoveryEngine {
         }
       }
 
-      // AUTOMATED CANDIDATE VERIFICATION & MEDIA ANALYSIS:
-      // If autoVerify is enabled (default true), immediately inspect reachability and run matching
+      // 2. AUTOMATED CANDIDATE VERIFICATION & MEDIA ANALYSIS:
+      // Inspect reachability, analyze DRM/access controls, and run perceptual frame matching
       if (params.autoVerify !== false) {
         for (const cand of insertedCandidates) {
           try {
@@ -136,6 +159,7 @@ export class DiscoveryEngine {
         completed_at: completedAt
       };
     } catch (err: any) {
+      console.error('[Discovery Engine Error]', err);
       const completedAt = new Date().toISOString();
       db.updateDiscoveryJob(jobId, {
         status: 'FAILED',
@@ -150,52 +174,5 @@ export class DiscoveryEngine {
         completed_at: completedAt
       };
     }
-  }
-
-  /**
-   * Internal provider implementation
-   */
-  private static async queryProvider(
-    provider: DiscoveryProvider,
-    keywords: string,
-    limit: number
-  ): Promise<{ url: string; title: string; suggestedType?: any; isLive?: boolean }[]> {
-    const cleanKeywords = keywords.trim().replace(/[^a-zA-Z0-9\s-]/g, '');
-    const slug = cleanKeywords.toLowerCase().replace(/\s+/g, '-');
-    const results: { url: string; title: string; suggestedType?: any; isLive?: boolean }[] = [];
-
-    const providerDomains: Record<DiscoveryProvider, string[]> = {
-      SPORTS_DIRECTORY: [
-        'live2all.sx', 'sportstream.tv', 'vipleague.st', 'buffstreams.sx', 'totalsportek.pro'
-      ],
-      STREAM_INDEXER: [
-        'streamhd24.net', 'freestreams-live1.tv', 'crichd.vip', 'hockey-live.stream', 'f1stream.me'
-      ],
-      SEARCH_CRAWLER: [
-        'soap2day-mirror.org', 'fmovies-free.to', '123movies-hd.uno', 'lookmovie2.to', 'cineb.rs'
-      ],
-      IPTV_PROBER: [
-        'iptv-line.club', 'm3u-feed.live', 'stream-gate-01.cx', 'ott-direct.tv', 'edge-cdn-sports.cc'
-      ]
-    };
-
-    const domains = providerDomains[provider] || providerDomains.SEARCH_CRAWLER;
-
-    for (let i = 0; i < Math.min(limit, domains.length); i++) {
-      const d = domains[i];
-      const isLive = provider === 'SPORTS_DIRECTORY' || provider === 'IPTV_PROBER';
-      const pathSuffix = isLive 
-        ? `/live/stream-${i + 1}/${slug}.m3u8`
-        : `/watch/${slug}-hd-stream-${i + 101}`;
-
-      results.push({
-        url: `https://${d}${pathSuffix}`,
-        title: `${keywords} — Stream HD #${i + 1} (${d})`,
-        suggestedType: isLive ? 'HLS_M3U8' : 'HTML_PLAYER',
-        isLive: isLive
-      });
-    }
-
-    return results;
   }
 }

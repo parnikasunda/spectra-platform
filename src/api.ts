@@ -11,41 +11,55 @@ import {
   EvidenceRecord 
 } from './types/client.js';
 
+/**
+ * Robust JSON parser helper that guarantees safe error decoding
+ * and prevents "Unexpected token '<'" exceptions.
+ */
+async function parseJsonResponse<T>(res: Response, fallbackError: string): Promise<T> {
+  const text = await res.text();
+  let json: any;
+  try {
+    json = JSON.parse(text);
+  } catch {
+    const preview = text.replace(/<[^>]*>?/gm, '').trim().slice(0, 150);
+    throw new Error(`${fallbackError} (HTTP ${res.status}): ${preview || 'Non-JSON server response'}`);
+  }
+
+  if (!res.ok || json.success === false) {
+    throw new Error(json.error || json.message || fallbackError);
+  }
+
+  return (json.data !== undefined ? json.data : json) as T;
+}
+
 export async function fetchStats(): Promise<SystemStats> {
   const res = await fetch('/api/stats');
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to fetch statistics');
-  return json.data;
+  return parseJsonResponse<SystemStats>(res, 'Failed to fetch statistics');
 }
 
 export async function fetchReferences(): Promise<ReferenceItem[]> {
   const res = await fetch('/api/references');
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to fetch references');
-  return json.data;
+  return parseJsonResponse<ReferenceItem[]>(res, 'Failed to fetch references');
 }
 
 export async function fetchReferenceDetails(id: string): Promise<ReferenceItem> {
   const res = await fetch(`/api/references/${id}`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to fetch reference details');
-  return json.data;
+  return parseJsonResponse<ReferenceItem>(res, 'Failed to fetch reference details');
 }
 
 export async function deleteReference(id: string): Promise<boolean> {
   const res = await fetch(`/api/references/${id}`, { method: 'DELETE' });
-  const json = await res.json();
-  return json.success;
+  const result = await parseJsonResponse<{ success: boolean }>(res, 'Failed to delete reference');
+  return result.success;
 }
 
 export async function registerReferenceUpload(formData: FormData): Promise<ReferenceItem> {
-  const res = await fetch('/api/references/upload', {
+  // Uses canonical POST /api/references (configured with Multer 500MB)
+  const res = await fetch('/api/references', {
     method: 'POST',
     body: formData
   });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to register reference upload');
-  return json.data;
+  return parseJsonResponse<ReferenceItem>(res, 'Failed to register reference upload');
 }
 
 export async function registerReferenceUrl(payload: {
@@ -56,21 +70,17 @@ export async function registerReferenceUrl(payload: {
   sample_interval_sec?: number;
   notes?: string;
 }): Promise<ReferenceItem> {
-  const res = await fetch('/api/references/url', {
+  const res = await fetch('/api/references', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to register reference URL');
-  return json.data;
+  return parseJsonResponse<ReferenceItem>(res, 'Failed to register reference URL');
 }
 
 export async function fetchDiscoveryJobs(): Promise<DiscoveryJob[]> {
   const res = await fetch('/api/discovery/jobs');
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to fetch discovery jobs');
-  return json.data;
+  return parseJsonResponse<DiscoveryJob[]>(res, 'Failed to fetch discovery jobs');
 }
 
 export async function launchDiscoveryJob(payload: {
@@ -86,9 +96,7 @@ export async function launchDiscoveryJob(payload: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to launch discovery sweep');
-  return json.data;
+  return parseJsonResponse<DiscoveryJob>(res, 'Failed to launch discovery sweep');
 }
 
 export async function fetchCandidates(filter?: { referenceId?: string; status?: string }): Promise<CandidateItem[]> {
@@ -97,9 +105,7 @@ export async function fetchCandidates(filter?: { referenceId?: string; status?: 
   if (filter?.status) params.append('status', filter.status);
 
   const res = await fetch(`/api/candidates?${params.toString()}`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to fetch candidates');
-  return json.data;
+  return parseJsonResponse<CandidateItem[]>(res, 'Failed to fetch candidates');
 }
 
 export async function verifyCandidate(candidateId: string, targetReferenceId?: string): Promise<{
@@ -112,9 +118,11 @@ export async function verifyCandidate(candidateId: string, targetReferenceId?: s
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ target_reference_id: targetReferenceId })
   });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Candidate verification failed');
-  return json.data;
+  return parseJsonResponse<{
+    candidate: CandidateItem;
+    evidenceRecord?: EvidenceRecord | null;
+    logs: string[];
+  }>(res, 'Candidate verification failed');
 }
 
 export async function quickInspectUrl(payload: {
@@ -131,9 +139,11 @@ export async function quickInspectUrl(payload: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Quick inspection failed');
-  return json.data;
+  return parseJsonResponse<{
+    candidate: CandidateItem;
+    evidenceRecord?: EvidenceRecord | null;
+    logs: string[];
+  }>(res, 'Quick inspection failed');
 }
 
 export async function fetchEvidenceRecords(filter?: { referenceId?: string; matchStatus?: string }): Promise<EvidenceRecord[]> {
@@ -142,16 +152,12 @@ export async function fetchEvidenceRecords(filter?: { referenceId?: string; matc
   if (filter?.matchStatus) params.append('matchStatus', filter.matchStatus);
 
   const res = await fetch(`/api/evidence?${params.toString()}`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to fetch evidence records');
-  return json.data;
+  return parseJsonResponse<EvidenceRecord[]>(res, 'Failed to fetch evidence records');
 }
 
 export async function fetchEvidenceById(id: string): Promise<EvidenceRecord> {
   const res = await fetch(`/api/evidence/${id}`);
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to fetch evidence record');
-  return json.data;
+  return parseJsonResponse<EvidenceRecord>(res, 'Failed to fetch evidence record');
 }
 
 export async function submitEvidenceReview(
@@ -163,29 +169,22 @@ export async function submitEvidenceReview(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to submit review');
-  return json.data;
+  return parseJsonResponse<EvidenceRecord>(res, 'Failed to submit review');
 }
 
 export async function generateTakedownNotice(id: string): Promise<{ notice: string; evidenceId: string }> {
   const res = await fetch(`/api/evidence/${id}/takedown`, {
     method: 'POST'
   });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to generate takedown notice');
-  return json.data;
+  return parseJsonResponse<{ notice: string; evidenceId: string }>(res, 'Failed to generate takedown notice');
 }
 
 export async function loadForensicFixtureSuite(): Promise<{ message: string; loadedReferences: number; loadedCandidates: number }> {
   const res = await fetch('/api/fixtures/load', { method: 'POST' });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to load forensic test suite');
-  return json;
+  return parseJsonResponse<{ message: string; loadedReferences: number; loadedCandidates: number }>(res, 'Failed to load forensic test suite');
 }
 
 export async function clearAllData(): Promise<void> {
   const res = await fetch('/api/fixtures/clear', { method: 'POST' });
-  const json = await res.json();
-  if (!json.success) throw new Error(json.error || 'Failed to reset database');
+  await parseJsonResponse<{ success: boolean }>(res, 'Failed to reset database');
 }

@@ -495,6 +495,21 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
                   <span>{copiedNotice ? 'Copied!' : 'Copy Notice'}</span>
                 </button>
                 <button
+                  onClick={() => {
+                    const blob = new Blob([takedownText], { type: 'text/plain;charset=utf-8' });
+                    const url = URL.createObjectURL(blob);
+                    const link = document.createElement('a');
+                    link.href = url;
+                    link.download = `dmca_takedown_${activeEvidence?.candidate_domain || 'notice'}_${Date.now()}.txt`;
+                    link.click();
+                    URL.revokeObjectURL(url);
+                  }}
+                  className="px-3 py-1.5 text-xs font-medium text-white bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5" />
+                  <span>Download (.txt)</span>
+                </button>
+                <button
                   onClick={() => setTakedownModalOpen(false)}
                   className="px-3 py-1.5 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded transition-colors"
                 >

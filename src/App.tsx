@@ -121,15 +121,17 @@ export default function App() {
   };
 
   const handleRegisterUpload = async (formData: FormData) => {
-    await registerReferenceUpload(formData);
+    const item = await registerReferenceUpload(formData);
     showNotification('Reference video uploaded and perceptual fingerprints generated.', 'success');
     await loadAllData();
+    return item;
   };
 
   const handleRegisterUrl = async (payload: any) => {
-    await registerReferenceUrl(payload);
+    const item = await registerReferenceUrl(payload);
     showNotification('Reference stream registered and frame fingerprints computed.', 'success');
     await loadAllData();
+    return item;
   };
 
   const handleLaunchSweep = async (payload: any) => {
@@ -150,6 +152,25 @@ export default function App() {
     showNotification(`Ad-hoc inspection completed: ${result.candidate.pipeline_status}`, 'success');
     await loadAllData();
     return result;
+  };
+
+  const handleLiveSportsSweep = async () => {
+    const sportsRef = references.find(r => r.asset_type === 'LIVE_SPORTS') || references[0];
+    const keywords = sportsRef ? sportsRef.title : 'Live Sports Champions League Final';
+    showNotification(`Executing automated live sports surveillance sweep for "${keywords}"...`, 'info');
+    try {
+      const job = await launchDiscoveryJob({
+        job_name: `Live Event Surveillance: ${keywords.slice(0, 24)}`,
+        provider: 'SPORTS_DIRECTORY',
+        target_reference_id: sportsRef?.id,
+        query_keywords: keywords,
+        max_candidates: 6
+      });
+      showNotification(`Live sweep complete! Found ${job.candidates_found} active streams with broadcast delay analysis.`, 'success');
+      await loadAllData();
+    } catch (err: any) {
+      showNotification(`Live sweep error: ${err.message}`, 'error');
+    }
   };
 
   return (
@@ -258,9 +279,7 @@ export default function App() {
                   setSelectedEvidence(ev);
                   setCurrentTab('evidence');
                 }}
-                onLaunchLiveSweep={() => {
-                  setCurrentTab('discovery');
-                }}
+                onLaunchLiveSweep={handleLiveSportsSweep}
               />
             )}
           </>

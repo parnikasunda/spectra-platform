@@ -350,13 +350,26 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
             </div>
 
             <div className="p-4 border-t border-slate-800 bg-slate-950/40 flex items-center justify-between text-xs text-slate-400">
-              <span>Candidate ID: {selectedCandidate.id}</span>
-              <button
-                onClick={() => setSelectedCandidate(null)}
-                className="px-3 py-1.5 text-xs text-white bg-slate-800 hover:bg-slate-700 rounded transition-colors"
-              >
-                Close Diagnostics
-              </button>
+              <span className="font-mono">Candidate ID: {selectedCandidate.id}</span>
+              <div className="flex items-center gap-2">
+                {selectedCandidate.pipeline_status === 'ANALYZED' && (
+                  <button
+                    onClick={() => {
+                      setSelectedCandidate(null);
+                      onNavigateToEvidence();
+                    }}
+                    className="px-3 py-1.5 text-xs text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded font-medium transition-colors"
+                  >
+                    View Forensic Evidence
+                  </button>
+                )}
+                <button
+                  onClick={() => setSelectedCandidate(null)}
+                  className="px-3 py-1.5 text-xs text-white bg-slate-800 hover:bg-slate-700 rounded transition-colors"
+                >
+                  Close Diagnostics
+                </button>
+              </div>
             </div>
           </div>
         </div>

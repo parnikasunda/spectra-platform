@@ -191,11 +191,18 @@ export class ArgusDatabase {
     );
   }
 
-  public updateReferenceFingerprintCount(id: string, count: number): void {
-    const stmt = this.db.prepare(`
-      UPDATE reference_items SET fingerprint_count = ?, status = 'REGISTERED' WHERE id = ?
-    `);
-    stmt.run(count, id);
+  public updateReferenceFingerprintCount(id: string, count: number, thumbnailUrl?: string): void {
+    if (thumbnailUrl) {
+      const stmt = this.db.prepare(`
+        UPDATE reference_items SET fingerprint_count = ?, status = 'REGISTERED', thumbnail_url = ? WHERE id = ?
+      `);
+      stmt.run(count, thumbnailUrl, id);
+    } else {
+      const stmt = this.db.prepare(`
+        UPDATE reference_items SET fingerprint_count = ?, status = 'REGISTERED' WHERE id = ?
+      `);
+      stmt.run(count, id);
+    }
   }
 
   public getReferences(): ReferenceItem[] {

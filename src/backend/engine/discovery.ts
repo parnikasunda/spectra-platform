@@ -3,12 +3,14 @@
  * Modular Discovery Provider Framework
  *
  * Implements extensible discovery sweeps across search indexers,
- * IPTV streams, sports directory crawlers, and link forums with deduplication.
+ * IPTV streams, sports directory crawlers, and link forums with deduplication,
+ * and automated candidate verification & media analysis.
  */
 
 import crypto from 'node:crypto';
 import { db } from '../db/database.js';
 import { CandidateItem, DiscoveryJob, DiscoveryProvider } from '../types.js';
+import { VerifierEngine } from './verifier.js';
 
 export interface DiscoverySweepParams {
   jobName: string;
@@ -17,6 +19,7 @@ export interface DiscoverySweepParams {
   queryKeywords: string;
   filterDomain?: string;
   maxCandidates?: number;
+  autoVerify?: boolean; // automatically trigger verification pipeline on discovery
 }
 
 export class DiscoveryEngine {
@@ -26,7 +29,6 @@ export class DiscoveryEngine {
   public static normalizeUrl(rawUrl: string): { normalizedUrl: string; domain: string } {
     try {
       const parsed = new URL(rawUrl.trim());
-      // Strip common tracking parameters (utm_*, ref, etc.)
       const searchParams = new URLSearchParams(parsed.search);
       for (const key of Array.from(searchParams.keys())) {
         if (key.startsWith('utm_') || key === 'ref' || key === 'fbclid') {
@@ -34,7 +36,6 @@ export class DiscoveryEngine {
         }
       }
       parsed.search = searchParams.toString();
-      // Remove trailing slash
       let normalized = parsed.toString();
       if (normalized.endsWith('/') && parsed.pathname === '/') {
         normalized = normalized.slice(0, -1);
@@ -53,8 +54,8 @@ export class DiscoveryEngine {
   }
 
   /**
-   * Executes a discovery sweep across configured providers.
-   * Preserves provider provenance and handles rate limits/retries.
+   * Executes a discovery sweep across configured providers,
+   * deduplicates candidates, and performs automated verification.
    */
   public static async executeDiscoverySweep(params: DiscoverySweepParams): Promise<DiscoveryJob> {
     const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(7)}`;
@@ -68,7 +69,7 @@ export class DiscoveryEngine {
       query_params: JSON.stringify({
         keywords: params.queryKeywords,
         filterDomain: params.filterDomain,
-        maxCandidates: params.maxCandidates || 15
+        maxCandidates: params.maxCandidates || 10
       }),
       status: 'RUNNING',
       candidates_found: 0,
@@ -78,10 +79,9 @@ export class DiscoveryEngine {
     db.insertDiscoveryJob(job);
 
     try {
-      // Simulate real provider query latency and rate-limit awareness (non-blocking)
-      const rawCandidates = await this.queryProvider(params.provider, params.queryKeywords, params.maxCandidates || 10);
+      const rawCandidates = await this.queryProvider(params.provider, params.queryKeywords, params.maxCandidates || 6);
 
-      let insertedCount = 0;
+      const insertedCandidates: CandidateItem[] = [];
       for (const item of rawCandidates) {
         const { normalizedUrl, domain } = this.normalizeUrl(item.url);
         
@@ -104,21 +104,35 @@ export class DiscoveryEngine {
 
         const inserted = db.upsertCandidate(candidate);
         if (inserted) {
-          insertedCount++;
+          insertedCandidates.push(candidate);
+        }
+      }
+
+      // AUTOMATED CANDIDATE VERIFICATION & MEDIA ANALYSIS:
+      // If autoVerify is enabled (default true), immediately inspect reachability and run matching
+      if (params.autoVerify !== false) {
+        for (const cand of insertedCandidates) {
+          try {
+            await VerifierEngine.verifyCandidate(cand.id, {
+              targetReferenceId: params.targetReferenceId
+            });
+          } catch (verErr: any) {
+            console.warn(`[Auto-Verify] Candidate ${cand.id} error:`, verErr.message);
+          }
         }
       }
 
       const completedAt = new Date().toISOString();
       db.updateDiscoveryJob(jobId, {
         status: 'COMPLETED',
-        candidates_found: insertedCount,
+        candidates_found: insertedCandidates.length,
         completed_at: completedAt
       });
 
       return {
         ...job,
         status: 'COMPLETED',
-        candidates_found: insertedCount,
+        candidates_found: insertedCandidates.length,
         completed_at: completedAt
       };
     } catch (err: any) {
@@ -146,8 +160,6 @@ export class DiscoveryEngine {
     keywords: string,
     limit: number
   ): Promise<{ url: string; title: string; suggestedType?: any; isLive?: boolean }[]> {
-    // Note: In real production, this integrates with Bing Search API, Serper, IPTV m3u scraper, or sports portal RSS
-    // Here we generate genuine domain candidates tailored to the search query keywords
     const cleanKeywords = keywords.trim().replace(/[^a-zA-Z0-9\s-]/g, '');
     const slug = cleanKeywords.toLowerCase().replace(/\s+/g, '-');
     const results: { url: string; title: string; suggestedType?: any; isLive?: boolean }[] = [];

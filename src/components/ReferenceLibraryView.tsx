@@ -8,24 +8,26 @@ import {
   Film, 
   Upload, 
   Link as LinkIcon, 
-  Clock, 
   Layers, 
   Trash2, 
   Eye, 
   CheckCircle2, 
   AlertCircle,
   X,
-  FileVideo
+  FileVideo,
+  Loader2,
+  Copy,
+  Check
 } from 'lucide-react';
-import { ReferenceItem, FrameFingerprint } from '../types/client.js';
+import { ReferenceItem } from '../types/client.js';
 import { fetchReferenceDetails } from '../api.js';
 
 interface ReferenceLibraryViewProps {
   references: ReferenceItem[];
   onRefresh: () => void;
   onDelete: (id: string) => void;
-  onRegisterUpload: (formData: FormData) => Promise<void>;
-  onRegisterUrl: (payload: any) => Promise<void>;
+  onRegisterUpload: (formData: FormData) => Promise<ReferenceItem | any>;
+  onRegisterUrl: (payload: any) => Promise<ReferenceItem | any>;
   isRegisterModalOpen: boolean;
   onCloseRegisterModal: () => void;
   onOpenRegisterModal: () => void;
@@ -44,6 +46,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
   const [selectedRef, setSelectedRef] = useState<ReferenceItem | null>(null);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [filterType, setFilterType] = useState<string>('ALL');
+  const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
   // Register Modal Form state
   const [regMode, setRegMode] = useState<'upload' | 'url'>('upload');
@@ -64,10 +67,16 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
       const full = await fetchReferenceDetails(ref.id);
       setSelectedRef(full);
     } catch (err: any) {
-      console.error(err);
+      console.error('Failed to load reference details:', err);
     } finally {
       setIsLoadingDetails(false);
     }
+  };
+
+  const handleCopyHash = (hash: string) => {
+    navigator.clipboard.writeText(hash);
+    setCopiedHash(hash);
+    setTimeout(() => setCopiedHash(null), 2000);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -76,9 +85,11 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
     setIsSubmitting(true);
 
     try {
+      let createdItem: ReferenceItem | null = null;
+
       if (regMode === 'upload') {
         if (!selectedFile) {
-          throw new Error('Please select a video file to upload');
+          throw new Error('Please select a video file to upload (MP4, MKV, MOV, WebM)');
         }
         const formData = new FormData();
         formData.append('mediaFile', selectedFile);
@@ -88,22 +99,24 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
         formData.append('sample_interval_sec', sampleInterval);
         if (notes) formData.append('notes', notes);
 
-        await onRegisterUpload(formData);
+        const result = await onRegisterUpload(formData);
+        createdItem = result && result.id ? result : null;
       } else {
-        if (!sourceUrl) {
-          throw new Error('Please enter a media stream or file URL');
+        if (!sourceUrl || !sourceUrl.trim()) {
+          throw new Error('Please enter a valid media stream or video source URL');
         }
-        await onRegisterUrl({
+        const result = await onRegisterUrl({
           title,
           rights_holder: rightsHolder,
           asset_type: assetType,
-          source_url: sourceUrl,
+          source_url: sourceUrl.trim(),
           sample_interval_sec: parseFloat(sampleInterval),
           notes
         });
+        createdItem = result && result.id ? result : null;
       }
 
-      // Reset form
+      // Reset form on success
       setTitle('');
       setRightsHolder('');
       setSourceUrl('');
@@ -111,8 +124,13 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
       setNotes('');
       onCloseRegisterModal();
       onRefresh();
+
+      // If created item was returned, open its Keyframe Timeline drawer immediately for visual verification
+      if (createdItem && createdItem.id) {
+        handleOpenDetails(createdItem);
+      }
     } catch (err: any) {
-      setSubmitError(err.message || 'Registration failed');
+      setSubmitError(err.message || 'Reference registration and fingerprinting failed');
     } finally {
       setIsSubmitting(false);
     }
@@ -130,7 +148,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
         <div>
           <h1 className="text-xl font-bold tracking-tight text-white">Reference Content Library</h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Registered ground-truth media assets with perceptual frame fingerprints (dHash/pHash) and cryptographic provenance records
+            Registered ground-truth media assets with perceptual frame fingerprints (64-bit dHash) and cryptographic provenance records
           </p>
         </div>
 
@@ -141,7 +159,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
               <button
                 key={type}
                 onClick={() => setFilterType(type)}
-                className={`px-2.5 py-1 text-xs font-mono transition-colors rounded ${
+                className={`px-2.5 py-1 text-xs font-mono transition-colors rounded cursor-pointer ${
                   filterType === type 
                     ? 'bg-slate-800 text-white font-medium shadow-sm' 
                     : 'text-slate-400 hover:text-slate-200'
@@ -167,11 +185,11 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
           <Film className="w-10 h-10 text-slate-600 mx-auto" />
           <div className="text-sm font-medium text-slate-300">No reference media registered yet</div>
           <p className="text-xs text-slate-400 max-w-md mx-auto">
-            Upload reference video footage or register a live stream URL to compute perceptual fingerprints for candidate matching.
+            Upload reference video footage (up to 500MB) or register a media stream URL to extract 64-bit dHash fingerprints for candidate matching.
           </p>
           <button
             onClick={onOpenRegisterModal}
-            className="px-4 py-2 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded transition-colors"
+            className="px-4 py-2 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded transition-colors cursor-pointer"
           >
             Register First Reference
           </button>
@@ -208,7 +226,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                     <span className="text-xs text-cyan-400 font-mono">{ref.asset_type}</span>
                   </div>
 
-                  {/* Clean unboxed metadata with · separators (Zero-pill discipline) */}
+                  {/* Clean unboxed metadata with · separators */}
                   <div className="flex flex-wrap items-center gap-2 text-xs text-slate-400">
                     <span>Rights Holder: <strong className="text-slate-300 font-normal">{ref.rights_holder}</strong></span>
                     <span className="text-slate-700">·</span>
@@ -218,7 +236,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                     <span className="text-slate-700">·</span>
                     <span className="font-mono">{ref.codec}</span>
                     <span className="text-slate-700">·</span>
-                    <span className="text-emerald-400 font-mono">{ref.fingerprint_count} Keyframe Hashes</span>
+                    <span className="text-emerald-400 font-mono font-medium">{ref.fingerprint_count} Keyframe Hashes</span>
                   </div>
 
                   <div className="text-[11px] font-mono text-slate-400 truncate max-w-lg">
@@ -233,7 +251,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                   className="px-3 py-1.5 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors inline-flex items-center gap-1.5 cursor-pointer"
                 >
                   <Eye className="w-3.5 h-3.5" />
-                  <span>Inspect Hashes</span>
+                  <span>Inspect Keyframe Hashes</span>
                 </button>
                 <button
                   onClick={() => onDelete(ref.id)}
@@ -258,12 +276,12 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                   Temporal Fingerprint Sequence — {selectedRef.title}
                 </h3>
                 <p className="text-xs text-slate-400 font-mono mt-0.5">
-                  64-bit dHash / pHash values extracted at configured temporal intervals
+                  64-bit dHash perceptual values and visual thumbnails extracted across temporal timeline
                 </p>
               </div>
               <button 
                 onClick={() => setSelectedRef(null)}
-                className="text-slate-400 hover:text-white p-1"
+                className="text-slate-400 hover:text-white p-1 cursor-pointer"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -271,12 +289,15 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
 
             <div className="p-6 overflow-y-auto space-y-4 flex-1">
               {isLoadingDetails ? (
-                <div className="py-12 text-center text-slate-400 text-xs">Loading frame hashes...</div>
+                <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-400 text-xs font-mono">
+                  <Loader2 className="w-5 h-5 text-cyan-400 animate-spin" />
+                  <span>Loading perceptual frame hashes from database...</span>
+                </div>
               ) : selectedRef.fingerprints && selectedRef.fingerprints.length > 0 ? (
                 <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                   {selectedRef.fingerprints.map((fp) => (
                     <div key={fp.id} className="p-3 bg-slate-950/70 border border-slate-800 rounded space-y-2">
-                      <div className="aspect-video bg-slate-900 rounded overflow-hidden flex items-center justify-center relative">
+                      <div className="aspect-video bg-slate-900 rounded overflow-hidden flex items-center justify-center relative border border-slate-800/60">
                         {fp.thumbnail_data ? (
                           <img 
                             src={fp.thumbnail_data} 
@@ -297,8 +318,21 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                           <span>Frame #{fp.frame_index}</span>
                           <span>Lum: {fp.avg_luminance}</span>
                         </div>
-                        <div className="text-[10px] font-mono bg-slate-900 p-1.5 rounded border border-slate-800/80 text-cyan-300 break-all">
-                          {fp.phash_hex}
+                        <div className="flex items-center justify-between gap-1 bg-slate-900 p-1.5 rounded border border-slate-800/80">
+                          <code className="text-[10px] font-mono text-cyan-300 break-all select-all">
+                            {fp.phash_hex}
+                          </code>
+                          <button
+                            onClick={() => handleCopyHash(fp.phash_hex)}
+                            title="Copy 64-bit dHash"
+                            className="text-slate-400 hover:text-white p-0.5 shrink-0 cursor-pointer"
+                          >
+                            {copiedHash === fp.phash_hex ? (
+                              <Check className="w-3 h-3 text-emerald-400" />
+                            ) : (
+                              <Copy className="w-3 h-3" />
+                            )}
+                          </button>
                         </div>
                       </div>
                     </div>
@@ -312,10 +346,10 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
             </div>
 
             <div className="p-4 border-t border-slate-800 bg-slate-950/40 flex items-center justify-between text-xs text-slate-400">
-              <span className="font-mono">Total Frames: {selectedRef.fingerprints?.length || 0}</span>
+              <span className="font-mono">Total Verified Keyframes: {selectedRef.fingerprints?.length || selectedRef.fingerprint_count || 0}</span>
               <button
                 onClick={() => setSelectedRef(null)}
-                className="px-3 py-1.5 text-xs text-white bg-slate-800 hover:bg-slate-700 rounded transition-colors"
+                className="px-3 py-1.5 text-xs text-white bg-slate-800 hover:bg-slate-700 rounded transition-colors cursor-pointer"
               >
                 Close Inspector
               </button>
@@ -335,7 +369,8 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
               </div>
               <button 
                 onClick={onCloseRegisterModal}
-                className="text-slate-400 hover:text-white p-1"
+                disabled={isSubmitting}
+                className="text-slate-400 hover:text-white p-1 cursor-pointer disabled:opacity-40"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -353,8 +388,9 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
               <div className="flex items-center gap-2 p-1 bg-slate-950 border border-slate-800 rounded">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setRegMode('upload')}
-                  className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors inline-flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors inline-flex items-center justify-center gap-1.5 cursor-pointer ${
                     regMode === 'upload' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
@@ -363,8 +399,9 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                 </button>
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={() => setRegMode('url')}
-                  className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors inline-flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors inline-flex items-center justify-center gap-1.5 cursor-pointer ${
                     regMode === 'url' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
@@ -379,10 +416,11 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                 <input
                   type="text"
                   required
+                  disabled={isSubmitting}
                   value={title}
                   onChange={(e) => setTitle(e.target.value)}
                   placeholder="e.g. UEFA Champions League Final / Film Master"
-                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+                  className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 disabled:opacity-50"
                 />
               </div>
 
@@ -392,10 +430,11 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                   <input
                     type="text"
                     required
+                    disabled={isSubmitting}
                     value={rightsHolder}
                     onChange={(e) => setRightsHolder(e.target.value)}
                     placeholder="e.g. UEFA / Warner Bros"
-                    className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+                    className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 disabled:opacity-50"
                   />
                 </div>
 
@@ -403,8 +442,9 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                   <label className="text-xs font-medium text-slate-300">Asset Type</label>
                   <select
                     value={assetType}
+                    disabled={isSubmitting}
                     onChange={(e) => setAssetType(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white focus:outline-none focus:border-cyan-400"
+                    className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white focus:outline-none focus:border-cyan-400 disabled:opacity-50"
                   >
                     <option value="VOD_FEATURE">VOD Feature Film</option>
                     <option value="LIVE_SPORTS">Live Sports Broadcast</option>
@@ -417,11 +457,12 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
 
               {regMode === 'upload' ? (
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-300">Select Video File (MP4, MKV, WebM)</label>
+                  <label className="text-xs font-medium text-slate-300">Select Video File (MP4, MKV, MOV up to 500MB)</label>
                   <div className="border border-dashed border-slate-800 rounded-lg p-4 bg-slate-950/40 text-center hover:border-slate-700 transition-colors">
                     <input
                       type="file"
-                      accept="video/*"
+                      accept="video/*,.mp4,.mkv,.mov,.webm"
+                      disabled={isSubmitting}
                       onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
                       className="hidden"
                       id="video-upload-input"
@@ -432,21 +473,22 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                         {selectedFile ? selectedFile.name : 'Click to select reference video file'}
                       </div>
                       <div className="text-[10px] text-slate-400 font-mono">
-                        {selectedFile ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB` : 'FFmpeg will probe codecs and extract frame hashes'}
+                        {selectedFile ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB` : 'FFmpeg will probe codecs and extract frame hashes (up to 500MB)'}
                       </div>
                     </label>
                   </div>
                 </div>
               ) : (
                 <div className="space-y-1.5">
-                  <label className="text-xs font-medium text-slate-300">Direct Source URL (HLS / MP4)</label>
+                  <label className="text-xs font-medium text-slate-300">Direct Source URL (HLS .m3u8 / Direct MP4 link)</label>
                   <input
                     type="url"
                     required
+                    disabled={isSubmitting}
                     value={sourceUrl}
                     onChange={(e) => setSourceUrl(e.target.value)}
                     placeholder="https://broadcast-cdn.example.com/master.m3u8"
-                    className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 font-mono"
+                    className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 font-mono disabled:opacity-50"
                   />
                 </div>
               )}
@@ -456,8 +498,9 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                   <label className="text-xs font-medium text-slate-300">Fingerprint Temporal Sampling</label>
                   <select
                     value={sampleInterval}
+                    disabled={isSubmitting}
                     onChange={(e) => setSampleInterval(e.target.value)}
-                    className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white focus:outline-none focus:border-cyan-400 font-mono"
+                    className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white focus:outline-none focus:border-cyan-400 font-mono disabled:opacity-50"
                   >
                     <option value="1">1 Frame / 1 sec (Ultra-dense)</option>
                     <option value="2">1 Frame / 2 sec (Recommended)</option>
@@ -469,28 +512,46 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                   <label className="text-xs font-medium text-slate-300">Internal Audit Notes</label>
                   <input
                     type="text"
+                    disabled={isSubmitting}
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     placeholder="e.g. Master clean feed rights package"
-                    className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400"
+                    className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 disabled:opacity-50"
                   />
                 </div>
               </div>
 
+              {/* In-flight Processing Banner */}
+              {isSubmitting && (
+                <div className="p-3 bg-cyan-950/30 border border-cyan-800/60 rounded flex items-center gap-3">
+                  <Loader2 className="w-5 h-5 text-cyan-400 animate-spin shrink-0" />
+                  <div className="space-y-0.5">
+                    <div className="text-xs font-medium text-cyan-200">
+                      Extracting Keyframes &amp; Calculating Perceptual Hashes...
+                    </div>
+                    <div className="text-[11px] text-cyan-400/80 font-mono">
+                      Running temporal sampling, probe metrics, and 64-bit dHash computation
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="pt-3 border-t border-slate-800 flex items-center justify-end gap-2">
                 <button
                   type="button"
+                  disabled={isSubmitting}
                   onClick={onCloseRegisterModal}
-                  className="px-3 py-1.5 text-xs text-slate-400 hover:text-white transition-colors"
+                  className="px-3 py-1.5 text-xs text-slate-400 hover:text-white transition-colors cursor-pointer disabled:opacity-40"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={isSubmitting}
-                  className="px-4 py-1.5 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 active:bg-cyan-500 rounded font-sans transition-colors disabled:opacity-50 cursor-pointer"
+                  className="px-4 py-1.5 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 active:bg-cyan-500 rounded font-sans transition-colors disabled:opacity-50 cursor-pointer inline-flex items-center gap-1.5"
                 >
-                  {isSubmitting ? 'Processing via FFmpeg...' : 'Register & Fingerprint'}
+                  {isSubmitting && <Loader2 className="w-3.5 h-3.5 animate-spin" />}
+                  <span>{isSubmitting ? 'Extracting Keyframes & Calculating Perceptual Hashes...' : 'Register & Fingerprint'}</span>
                 </button>
               </div>
             </form>

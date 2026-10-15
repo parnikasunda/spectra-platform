@@ -18,14 +18,14 @@ import {
   Check
 } from 'lucide-react';
 import { ReferenceItem } from '../types/client.js';
-import { fetchReferenceDetails } from '../api.js';
+import { fetchReferenceDetails, registerReference } from '../api.js';
 
 interface ReferenceLibraryViewProps {
   references: ReferenceItem[];
   onRefresh: () => void;
   onDelete: (id: string) => void;
-  onRegisterUpload: (formData: FormData) => Promise<ReferenceItem | any>;
-  onRegisterUrl: (payload: any) => Promise<ReferenceItem | any>;
+  onRegisterUpload?: (formData: FormData) => Promise<ReferenceItem | any>;
+  onRegisterUrl?: (payload: any) => Promise<ReferenceItem | any>;
   isRegisterModalOpen: boolean;
   onCloseRegisterModal: () => void;
   onOpenRegisterModal: () => void;
@@ -46,15 +46,15 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
   const [filterType, setFilterType] = useState<string>('ALL');
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
-  // Register Modal Form state with clean field naming
-  const [regMode, setRegMode] = useState<'upload' | 'url'>('upload');
+  // Register Modal Form state
+  const [mode, setMode] = useState<'upload' | 'url'>('upload');
   const [title, setTitle] = useState('');
   const [rightsHolder, setRightsHolder] = useState('');
   const [assetType, setAssetType] = useState('VOD_FEATURE');
   const [sourceUrl, setSourceUrl] = useState('');
   const [sampleInterval, setSampleInterval] = useState('2');
   const [auditNotes, setAuditNotes] = useState('');
-  const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [file, setFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
 
@@ -85,33 +85,38 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
     try {
       let createdItem: ReferenceItem | null = null;
 
-      if (regMode === 'upload') {
-        if (!selectedFile) {
+      if (mode === 'upload') {
+        if (!file) {
           throw new Error('Please select a video file to upload (MP4, MKV, MOV, WebM)');
         }
-        // 1. FRONTEND FORM ENCODING: Construct a true FormData object with exact field names
+        // 2. FIX: Construct a FormData object with exact field names
         const formData = new FormData();
-        formData.append('file', selectedFile);
         formData.append('title', title);
         formData.append('rightsHolder', rightsHolder);
         formData.append('assetType', assetType);
         formData.append('auditNotes', auditNotes);
         formData.append('sampleInterval', sampleInterval);
+        formData.append('file', file); // key name MUST match multer upload.single('file')
 
-        // Include alias field names for comprehensive backend compatibility
+        // Additional compatibility aliases
         formData.append('rights_holder', rightsHolder);
         formData.append('asset_type', assetType);
         formData.append('notes', auditNotes);
         formData.append('sample_interval_sec', sampleInterval);
-        formData.append('mediaFile', selectedFile);
 
-        const result = await onRegisterUpload(formData);
-        createdItem = result && result.id ? result : null;
+        // Pass formData directly to registerReference(formData)
+        if (onRegisterUpload) {
+          const res = await onRegisterUpload(formData);
+          createdItem = res && res.id ? res : (res && res.data ? res.data : null);
+        } else {
+          const res = await registerReference(formData);
+          createdItem = res && res.id ? res : (res && res.data ? res.data : null);
+        }
       } else {
         if (!sourceUrl || !sourceUrl.trim()) {
           throw new Error('Please enter a valid media stream or video source URL');
         }
-        const result = await onRegisterUrl({
+        const payload = {
           title,
           rightsHolder,
           rights_holder: rightsHolder,
@@ -123,20 +128,25 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
           sample_interval_sec: parseFloat(sampleInterval),
           auditNotes,
           notes: auditNotes
-        });
-        createdItem = result && result.id ? result : null;
+        };
+        if (onRegisterUrl) {
+          const res = await onRegisterUrl(payload);
+          createdItem = res && res.id ? res : (res && res.data ? res.data : null);
+        } else {
+          const res = await registerReference(payload);
+          createdItem = res && res.id ? res : (res && res.data ? res.data : null);
+        }
       }
 
       // Reset form on success
       setTitle('');
       setRightsHolder('');
       setSourceUrl('');
-      setSelectedFile(null);
+      setFile(null);
       setAuditNotes('');
       onCloseRegisterModal();
       onRefresh();
 
-      // Open Keyframe Timeline drawer for the newly registered reference for immediate visual verification
       if (createdItem && createdItem.id) {
         handleOpenDetails(createdItem);
       }
@@ -400,9 +410,9 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                 <button
                   type="button"
                   disabled={isSubmitting}
-                  onClick={() => setRegMode('upload')}
+                  onClick={() => setMode('upload')}
                   className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors inline-flex items-center justify-center gap-1.5 cursor-pointer ${
-                    regMode === 'upload' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'
+                    mode === 'upload' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   <Upload className="w-3.5 h-3.5" />
@@ -411,9 +421,9 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                 <button
                   type="button"
                   disabled={isSubmitting}
-                  onClick={() => setRegMode('url')}
+                  onClick={() => setMode('url')}
                   className={`flex-1 py-1.5 text-xs font-medium rounded transition-colors inline-flex items-center justify-center gap-1.5 cursor-pointer ${
-                    regMode === 'url' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'
+                    mode === 'url' ? 'bg-slate-800 text-white' : 'text-slate-400 hover:text-slate-200'
                   }`}
                 >
                   <LinkIcon className="w-3.5 h-3.5" />
@@ -466,7 +476,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                 </div>
               </div>
 
-              {regMode === 'upload' ? (
+              {mode === 'upload' ? (
                 <div className="space-y-1.5">
                   <label className="text-xs font-medium text-slate-300">Select Video File (MP4, MKV, MOV up to 500MB)</label>
                   <div className="border border-dashed border-slate-800 rounded-lg p-4 bg-slate-950/40 text-center hover:border-slate-700 transition-colors">
@@ -474,17 +484,17 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                       type="file"
                       accept="video/*,.mp4,.mkv,.mov,.webm"
                       disabled={isSubmitting}
-                      onChange={(e) => setSelectedFile(e.target.files?.[0] || null)}
+                      onChange={(e) => setFile(e.target.files?.[0] || null)}
                       className="hidden"
                       id="video-upload-input"
                     />
                     <label htmlFor="video-upload-input" className="cursor-pointer block space-y-1">
                       <Upload className="w-6 h-6 text-slate-500 mx-auto" />
                       <div className="text-xs text-slate-300">
-                        {selectedFile ? selectedFile.name : 'Click to select reference video file'}
+                        {file ? file.name : 'Click to select reference video file'}
                       </div>
                       <div className="text-[10px] text-slate-400 font-mono">
-                        {selectedFile ? `${(selectedFile.size / (1024 * 1024)).toFixed(2)} MB` : 'FFmpeg will probe codecs and extract frame hashes (up to 500MB)'}
+                        {file ? `${(file.size / (1024 * 1024)).toFixed(2)} MB` : 'FFmpeg will probe codecs and extract frame hashes (up to 500MB)'}
                       </div>
                     </label>
                   </div>

@@ -12,83 +12,102 @@ import {
 } from './types/client.js';
 
 /**
- * Robust JSON parser helper that guarantees safe error decoding
- * and prevents "Unexpected token '<'" exceptions.
+ * 1. FIX src/api.ts: registerReference(payload)
+ * - Checks if payload is an instance of FormData
+ * - If FormData, DO NOT set 'Content-Type': 'application/json' or any manual Content-Type header.
+ *   Let the browser automatically set multipart/form-data with boundary.
+ * - Safe JSON parser wrapper that catches non-JSON HTML error responses.
  */
-async function parseJsonResponse<T>(res: Response, fallbackError: string): Promise<T> {
-  const text = await res.text();
-  let json: any;
+export async function registerReference(payload: FormData | Record<string, any>): Promise<any> {
+  const isFormData = typeof FormData !== 'undefined' && payload instanceof FormData;
+
+  const response = await fetch('/api/references', {
+    method: 'POST',
+    body: isFormData ? payload : JSON.stringify(payload),
+    headers: isFormData ? {} : { 'Content-Type': 'application/json' }
+  });
+
+  const text = await response.text();
+  let data: any;
   try {
-    json = JSON.parse(text);
-  } catch {
-    const preview = text.replace(/<[^>]*>?/gm, '').trim().slice(0, 150);
-    throw new Error(`${fallbackError} (HTTP ${res.status}): ${preview || 'Non-JSON server response'}`);
+    data = JSON.parse(text);
+  } catch (e) {
+    throw new Error(`Server returned non-JSON response (${response.status}): ${text.slice(0, 100)}`);
   }
 
-  if (!res.ok || json.success === false || json.error) {
-    throw new Error(json.error || json.message || fallbackError);
+  if (!response.ok) {
+    throw new Error(data.error || `Server error ${response.status}`);
   }
 
-  return (json.data !== undefined ? json.data : json) as T;
+  return data.data !== undefined ? data.data : data;
 }
+
+// Backward-compatible aliases for existing callers
+export const registerReferenceUpload = registerReference;
+export const registerReferenceUrl = registerReference;
 
 export async function fetchStats(): Promise<SystemStats> {
   const res = await fetch('/api/stats');
-  return parseJsonResponse<SystemStats>(res, 'Failed to fetch statistics');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function fetchReferences(): Promise<ReferenceItem[]> {
   const res = await fetch('/api/references');
-  return parseJsonResponse<ReferenceItem[]>(res, 'Failed to fetch references');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function fetchReferenceDetails(id: string): Promise<ReferenceItem> {
   const res = await fetch(`/api/references/${id}`);
-  return parseJsonResponse<ReferenceItem>(res, 'Failed to fetch reference details');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function deleteReference(id: string): Promise<boolean> {
   const res = await fetch(`/api/references/${id}`, { method: 'DELETE' });
-  const result = await parseJsonResponse<{ success: boolean }>(res, 'Failed to delete reference');
-  return result.success;
-}
-
-/**
- * Sends multipart/form-data directly to POST /api/references without setting Content-Type header
- */
-export async function registerReferenceUpload(formData: FormData): Promise<ReferenceItem> {
-  const res = await fetch('/api/references', {
-    method: 'POST',
-    body: formData
-    // DO NOT set 'Content-Type': 'application/json' or stringify FormData
-  });
-  return parseJsonResponse<ReferenceItem>(res, 'Failed to register reference upload');
-}
-
-export async function registerReferenceUrl(payload: {
-  title: string;
-  rightsHolder?: string;
-  rights_holder?: string;
-  assetType?: string;
-  asset_type?: string;
-  sourceUrl?: string;
-  source_url?: string;
-  sampleInterval?: number;
-  sample_interval_sec?: number;
-  auditNotes?: string;
-  notes?: string;
-}): Promise<ReferenceItem> {
-  const res = await fetch('/api/references', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
-  });
-  return parseJsonResponse<ReferenceItem>(res, 'Failed to register reference URL');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  return Boolean(data.success);
 }
 
 export async function fetchDiscoveryJobs(): Promise<DiscoveryJob[]> {
   const res = await fetch('/api/discovery/jobs');
-  return parseJsonResponse<DiscoveryJob[]>(res, 'Failed to fetch discovery jobs');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function launchDiscoveryJob(payload: {
@@ -104,7 +123,15 @@ export async function launchDiscoveryJob(payload: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  return parseJsonResponse<DiscoveryJob>(res, 'Failed to launch discovery sweep');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function fetchCandidates(filter?: { referenceId?: string; status?: string }): Promise<CandidateItem[]> {
@@ -113,7 +140,15 @@ export async function fetchCandidates(filter?: { referenceId?: string; status?: 
   if (filter?.status) params.append('status', filter.status);
 
   const res = await fetch(`/api/candidates?${params.toString()}`);
-  return parseJsonResponse<CandidateItem[]>(res, 'Failed to fetch candidates');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function verifyCandidate(candidateId: string, targetReferenceId?: string): Promise<{
@@ -126,11 +161,15 @@ export async function verifyCandidate(candidateId: string, targetReferenceId?: s
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ target_reference_id: targetReferenceId })
   });
-  return parseJsonResponse<{
-    candidate: CandidateItem;
-    evidenceRecord?: EvidenceRecord | null;
-    logs: string[];
-  }>(res, 'Candidate verification failed');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function quickInspectUrl(payload: {
@@ -147,11 +186,15 @@ export async function quickInspectUrl(payload: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  return parseJsonResponse<{
-    candidate: CandidateItem;
-    evidenceRecord?: EvidenceRecord | null;
-    logs: string[];
-  }>(res, 'Quick inspection failed');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function fetchEvidenceRecords(filter?: { referenceId?: string; matchStatus?: string }): Promise<EvidenceRecord[]> {
@@ -160,12 +203,28 @@ export async function fetchEvidenceRecords(filter?: { referenceId?: string; matc
   if (filter?.matchStatus) params.append('matchStatus', filter.matchStatus);
 
   const res = await fetch(`/api/evidence?${params.toString()}`);
-  return parseJsonResponse<EvidenceRecord[]>(res, 'Failed to fetch evidence records');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function fetchEvidenceById(id: string): Promise<EvidenceRecord> {
   const res = await fetch(`/api/evidence/${id}`);
-  return parseJsonResponse<EvidenceRecord>(res, 'Failed to fetch evidence record');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function submitEvidenceReview(
@@ -177,22 +236,53 @@ export async function submitEvidenceReview(
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(payload)
   });
-  return parseJsonResponse<EvidenceRecord>(res, 'Failed to submit review');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function generateTakedownNotice(id: string): Promise<{ notice: string; evidenceId: string }> {
   const res = await fetch(`/api/evidence/${id}/takedown`, {
     method: 'POST'
   });
-  return parseJsonResponse<{ notice: string; evidenceId: string }>(res, 'Failed to generate takedown notice');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data.data !== undefined ? data.data : data;
 }
 
 export async function loadForensicFixtureSuite(): Promise<{ message: string; loadedReferences: number; loadedCandidates: number }> {
   const res = await fetch('/api/fixtures/load', { method: 'POST' });
-  return parseJsonResponse<{ message: string; loadedReferences: number; loadedCandidates: number }>(res, 'Failed to load forensic test suite');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
+  return data;
 }
 
 export async function clearAllData(): Promise<void> {
   const res = await fetch('/api/fixtures/clear', { method: 'POST' });
-  await parseJsonResponse<{ success: boolean }>(res, 'Failed to reset database');
+  const text = await res.text();
+  let data: any;
+  try {
+    data = JSON.parse(text);
+  } catch {
+    throw new Error(`Server returned non-JSON response (${res.status}): ${text.slice(0, 100)}`);
+  }
+  if (!res.ok) throw new Error(data.error || `Server error ${res.status}`);
 }

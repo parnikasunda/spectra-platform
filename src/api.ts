@@ -25,7 +25,7 @@ async function parseJsonResponse<T>(res: Response, fallbackError: string): Promi
     throw new Error(`${fallbackError} (HTTP ${res.status}): ${preview || 'Non-JSON server response'}`);
   }
 
-  if (!res.ok || json.success === false) {
+  if (!res.ok || json.success === false || json.error) {
     throw new Error(json.error || json.message || fallbackError);
   }
 
@@ -53,21 +53,29 @@ export async function deleteReference(id: string): Promise<boolean> {
   return result.success;
 }
 
+/**
+ * Sends multipart/form-data directly to POST /api/references without setting Content-Type header
+ */
 export async function registerReferenceUpload(formData: FormData): Promise<ReferenceItem> {
-  // Uses canonical POST /api/references (configured with Multer 500MB)
   const res = await fetch('/api/references', {
     method: 'POST',
     body: formData
+    // DO NOT set 'Content-Type': 'application/json' or stringify FormData
   });
   return parseJsonResponse<ReferenceItem>(res, 'Failed to register reference upload');
 }
 
 export async function registerReferenceUrl(payload: {
   title: string;
-  rights_holder: string;
-  asset_type: string;
-  source_url: string;
+  rightsHolder?: string;
+  rights_holder?: string;
+  assetType?: string;
+  asset_type?: string;
+  sourceUrl?: string;
+  source_url?: string;
+  sampleInterval?: number;
   sample_interval_sec?: number;
+  auditNotes?: string;
   notes?: string;
 }): Promise<ReferenceItem> {
   const res = await fetch('/api/references', {

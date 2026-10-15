@@ -17,57 +17,54 @@ import { ReferenceItem, FrameFingerprint, CandidateItem } from './types.js';
 
 const router = Router();
 
-// 1. CONFIGURE MULTER FOR 500MB FILE UPLOADS IN ./uploads/
+// Ensure uploads directory exists
 const uploadsDir = path.resolve(process.cwd(), 'uploads');
 if (!fs.existsSync(uploadsDir)) {
   fs.mkdirSync(uploadsDir, { recursive: true });
 }
 
+// 3. CONFIGURE MULTER FOR /api/references (500MB limit with diskStorage in ./uploads/)
 const storage = multer.diskStorage({
   destination: (_req, _file, cb) => {
-    cb(null, uploadsDir);
+    if (!fs.existsSync('./uploads/')) {
+      fs.mkdirSync('./uploads/', { recursive: true });
+    }
+    cb(null, './uploads/');
   },
-  filename: (_req, file, cb) => {
-    const ext = path.extname(file.originalname) || '.mp4';
-    const safeName = `${Date.now()}_${Math.random().toString(36).substring(7)}${ext}`;
-    cb(null, safeName);
-  }
+  filename: (_req, file, cb) => cb(null, `${Date.now()}-${file.originalname}`)
 });
 
-const upload = multer({
-  storage,
-  limits: { 
-    fileSize: 500 * 1024 * 1024, // 500MB payload limit
-    fieldSize: 500 * 1024 * 1024
-  }
+const upload = multer({ 
+  storage, 
+  limits: { fileSize: 500 * 1024 * 1024 } 
 });
 
-// Resilient middleware to safely handle multipart file uploads or pass through JSON/urlencoded requests
-// Catches Multer limits or parsing errors and guarantees strict JSON responses (Never HTML)
-const handleUploadMiddleware = (req: Request, res: Response, next: NextFunction) => {
+// Middleware to safely handle multipart upload using upload.single('file') or pass through JSON
+const handleUpload = (req: Request, res: Response, next: NextFunction) => {
   const contentType = req.headers['content-type'] || '';
   if (!contentType.includes('multipart/form-data')) {
     return next();
   }
 
-  upload.any()(req, res, (err: any) => {
-    res.setHeader('Content-Type', 'application/json');
+  upload.single('file')(req, res, (err: any) => {
     if (err) {
-      if (err.code === 'LIMIT_FILE_SIZE') {
-        return res.status(413).json({
-          success: false,
-          error: 'File size exceeds maximum allowable limit of 500MB'
-        });
-      }
-      return res.status(400).json({
-        success: false,
-        error: err.message || 'Multipart file upload parsing error'
-      });
+      console.error('[Multer Error]', err);
+      res.setHeader('Content-Type', 'application/json');
+      return res.status(500).json({ error: err.message || 'File upload failed' });
     }
-
-    // Populate req.file from req.files if any file was uploaded
-    if (!req.file && Array.isArray(req.files) && req.files.length > 0) {
-      req.file = req.files[0];
+    // If not found under 'file', try fallback to 'mediaFile' or any
+    if (!req.file) {
+      upload.any()(req, res, (err2: any) => {
+        if (err2) {
+          res.setHeader('Content-Type', 'application/json');
+          return res.status(500).json({ error: err2.message || 'File upload failed' });
+        }
+        if (!req.file && Array.isArray(req.files) && req.files.length > 0) {
+          req.file = req.files[0];
+        }
+        next();
+      });
+      return;
     }
     next();
   });
@@ -82,7 +79,7 @@ router.get('/stats', (_req: Request, res: Response) => {
     const stats = db.getSystemStats();
     return res.json({ success: true, data: stats });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to compute system stats' });
+    return res.status(500).json({ error: err.message || 'Failed to compute system stats' });
   }
 });
 
@@ -95,7 +92,7 @@ router.get('/references', (_req: Request, res: Response) => {
     const refs = db.getReferences();
     return res.json({ success: true, data: refs });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to retrieve references' });
+    return res.status(500).json({ error: err.message || 'Failed to retrieve references' });
   }
 });
 
@@ -104,33 +101,38 @@ router.get('/references/:id', (req: Request, res: Response) => {
   try {
     const ref = db.getReferenceById(req.params.id);
     if (!ref) {
-      return res.status(404).json({ success: false, error: 'Reference not found' });
+      return res.status(404).json({ error: 'Reference not found' });
     }
     const fingerprints = db.getReferenceFingerprints(ref.id);
     return res.json({ success: true, data: { ...ref, fingerprints } });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to retrieve reference details' });
+    return res.status(500).json({ error: err.message || 'Failed to retrieve reference details' });
   }
 });
 
 /**
  * Robust Reference Content Registration Handler:
  * Strictly guarantees JSON output under all circumstances.
- * Supports direct file uploads (up to 500MB in ./uploads/) and direct media URLs.
+ * Accepts both multipart form uploads ('file') and JSON stream URLs.
  */
-async function processReferenceRegistration(req: Request, res: Response) {
+async function handleRegisterReference(req: Request, res: Response) {
   res.setHeader('Content-Type', 'application/json');
   try {
-    const { title, rights_holder, asset_type, source_url, notes, sample_interval_sec } = req.body || {};
+    const title = req.body?.title;
+    const rightsHolder = req.body?.rightsHolder || req.body?.rights_holder;
+    const assetType = req.body?.assetType || req.body?.asset_type;
+    const auditNotes = req.body?.auditNotes || req.body?.notes;
+    const sampleInterval = req.body?.sampleInterval || req.body?.sample_interval_sec;
+    const sourceUrl = req.body?.sourceUrl || req.body?.source_url;
 
     if (!title || !String(title).trim()) {
-      return res.status(400).json({ success: false, error: 'Title is required for reference registration' });
+      return res.status(400).json({ error: 'Title is required for reference registration' });
     }
-    if (!rights_holder || !String(rights_holder).trim()) {
-      return res.status(400).json({ success: false, error: 'Rights holder is required for legal chain of custody' });
+    if (!rightsHolder || !String(rightsHolder).trim()) {
+      return res.status(400).json({ error: 'Rights holder is required for legal chain of custody' });
     }
 
-    const intervalSec = parseFloat(sample_interval_sec) || 2.0;
+    const intervalSec = parseFloat(sampleInterval) || 2.0;
     const refId = `ref_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     const now = new Date().toISOString();
 
@@ -141,23 +143,27 @@ async function processReferenceRegistration(req: Request, res: Response) {
 
     if (req.file) {
       // Multipart File Upload Mode
-      filePath = req.file.path;
+      filePath = path.resolve(process.cwd(), req.file.path);
       sourceType = 'UPLOAD';
       try {
-        const fileBuffer = fs.readFileSync(filePath);
-        provenanceHash = crypto.createHash('sha256').update(fileBuffer).digest('hex');
+        provenanceHash = await new Promise<string>((resolve, reject) => {
+          const hash = crypto.createHash('sha256');
+          const stream = fs.createReadStream(filePath!);
+          stream.on('data', chunk => hash.update(chunk));
+          stream.on('end', () => resolve(hash.digest('hex')));
+          stream.on('error', err => reject(err));
+        });
       } catch {
-        provenanceHash = crypto.createHash('sha256').update(`${req.file.originalname}_${Date.now()}`).digest('hex');
+        provenanceHash = crypto.createHash('sha256').update(`${req.file.originalname}_${req.file.size}_${Date.now()}`).digest('hex');
       }
-    } else if (source_url && String(source_url).trim()) {
+    } else if (sourceUrl && String(sourceUrl).trim()) {
       // Direct Stream URL Mode
-      effectiveSourceUrl = String(source_url).trim();
+      effectiveSourceUrl = String(sourceUrl).trim();
       sourceType = 'DIRECT_URL';
       provenanceHash = crypto.createHash('sha256').update(effectiveSourceUrl).digest('hex');
     } else {
       return res.status(400).json({
-        success: false,
-        error: 'Either a video file (mediaFile) or a valid media source URL (source_url) must be provided'
+        error: 'Either a video file (file) or a valid media source URL (sourceUrl / source_url) must be provided'
       });
     }
 
@@ -167,8 +173,8 @@ async function processReferenceRegistration(req: Request, res: Response) {
     const refItem: ReferenceItem = {
       id: refId,
       title: String(title).trim(),
-      rights_holder: String(rights_holder).trim(),
-      asset_type: asset_type || (sourceType === 'DIRECT_URL' ? 'LIVE_SPORTS' : 'VOD_FEATURE'),
+      rights_holder: String(rightsHolder).trim(),
+      asset_type: assetType || (sourceType === 'DIRECT_URL' ? 'LIVE_SPORTS' : 'VOD_FEATURE'),
       duration_sec: probe.duration_sec,
       resolution: `${probe.width}x${probe.height}`,
       fps: probe.fps,
@@ -180,13 +186,12 @@ async function processReferenceRegistration(req: Request, res: Response) {
       status: 'PROCESSING',
       provenance_sha256: provenanceHash,
       fingerprint_count: 0,
-      notes: notes ? String(notes) : undefined
+      notes: auditNotes ? String(auditNotes) : undefined
     };
 
     db.insertReference(refItem);
 
     // Extract keyframes and generate 64-bit dHash perceptual hashes
-    // Uses FFmpeg when available, with automatic pure-JS fallback across 5 sample timestamps (0s, 5s, 10s, 15s, 20s)
     const extractedFrames = await FingerprintEngine.extractVideoFingerprints(mediaTarget, {
       intervalSec,
       maxFrames: 30,
@@ -222,18 +227,17 @@ async function processReferenceRegistration(req: Request, res: Response) {
     console.error('[Reference Registration Error]', err);
     res.setHeader('Content-Type', 'application/json');
     return res.status(500).json({
-      success: false,
-      error: err.message || 'Reference content registration and fingerprinting failed'
+      error: err.message || 'Reference registration failed'
     });
   }
 }
 
-// Canonical endpoint: POST /api/references (Supports both multipart upload & JSON stream URL)
-router.post('/references', handleUploadMiddleware, processReferenceRegistration);
+// Canonical endpoint: POST /api/references with upload.single('file')
+router.post('/references', handleUpload, handleRegisterReference);
 
-// Endpoint aliases for backward compatibility
-router.post('/references/upload', handleUploadMiddleware, processReferenceRegistration);
-router.post('/references/url', handleUploadMiddleware, processReferenceRegistration);
+// Backward-compatibility aliases
+router.post('/references/upload', handleUpload, handleRegisterReference);
+router.post('/references/url', handleUpload, handleRegisterReference);
 
 router.delete('/references/:id', (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'application/json');
@@ -241,7 +245,7 @@ router.delete('/references/:id', (req: Request, res: Response) => {
     const success = db.deleteReference(req.params.id);
     return res.json({ success });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to delete reference' });
+    return res.status(500).json({ error: err.message || 'Failed to delete reference' });
   }
 });
 
@@ -254,7 +258,7 @@ router.get('/discovery/jobs', (_req: Request, res: Response) => {
     const jobs = db.getDiscoveryJobs();
     return res.json({ success: true, data: jobs });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to retrieve discovery jobs' });
+    return res.status(500).json({ error: err.message || 'Failed to retrieve discovery jobs' });
   }
 });
 
@@ -264,7 +268,6 @@ router.post('/discovery/jobs', async (req: Request, res: Response) => {
     const { job_name, provider, target_reference_id, query_keywords, filter_domain, max_candidates, auto_verify } = req.body || {};
     if (!job_name || !provider || !query_keywords) {
       return res.status(400).json({
-        success: false,
         error: 'Job name, provider, and search keywords are required'
       });
     }
@@ -281,7 +284,7 @@ router.post('/discovery/jobs', async (req: Request, res: Response) => {
 
     return res.json({ success: true, data: job });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to launch discovery sweep' });
+    return res.status(500).json({ error: err.message || 'Failed to launch discovery sweep' });
   }
 });
 
@@ -295,7 +298,7 @@ router.get('/candidates', (req: Request, res: Response) => {
     const candidates = db.getCandidates({ referenceId, status });
     return res.json({ success: true, data: candidates });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to fetch candidates' });
+    return res.status(500).json({ error: err.message || 'Failed to fetch candidates' });
   }
 });
 
@@ -308,7 +311,7 @@ router.post('/candidates/verify/:id', async (req: Request, res: Response) => {
     });
     return res.json({ success: true, data: result });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Candidate verification failed' });
+    return res.status(500).json({ error: err.message || 'Candidate verification failed' });
   }
 });
 
@@ -317,7 +320,7 @@ router.post('/candidates/quick-inspect', async (req: Request, res: Response) => 
   try {
     const { url, title, target_reference_id } = req.body || {};
     if (!url) {
-      return res.status(400).json({ success: false, error: 'Source URL is required for inspection' });
+      return res.status(400).json({ error: 'Source URL is required for inspection' });
     }
 
     const { normalizedUrl, domain } = DiscoveryEngine.normalizeUrl(url);
@@ -346,7 +349,7 @@ router.post('/candidates/quick-inspect', async (req: Request, res: Response) => 
 
     return res.json({ success: true, data: result });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Quick inspection failed' });
+    return res.status(500).json({ error: err.message || 'Quick inspection failed' });
   }
 });
 
@@ -360,7 +363,7 @@ router.get('/evidence', (req: Request, res: Response) => {
     const records = db.getEvidenceRecords({ referenceId, matchStatus });
     return res.json({ success: true, data: records });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to fetch evidence records' });
+    return res.status(500).json({ error: err.message || 'Failed to fetch evidence records' });
   }
 });
 
@@ -369,11 +372,11 @@ router.get('/evidence/:id', (req: Request, res: Response) => {
   try {
     const record = db.getEvidenceById(req.params.id);
     if (!record) {
-      return res.status(404).json({ success: false, error: 'Evidence record not found' });
+      return res.status(404).json({ error: 'Evidence record not found' });
     }
     return res.json({ success: true, data: record });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to fetch evidence details' });
+    return res.status(500).json({ error: err.message || 'Failed to fetch evidence details' });
   }
 });
 
@@ -383,7 +386,6 @@ router.post('/evidence/:id/review', (req: Request, res: Response) => {
     const { decision, reviewed_by, notes } = req.body || {};
     if (!decision || !reviewed_by) {
       return res.status(400).json({
-        success: false,
         error: 'Review decision and investigator name are required'
       });
     }
@@ -397,7 +399,7 @@ router.post('/evidence/:id/review', (req: Request, res: Response) => {
     const updated = db.getEvidenceById(req.params.id);
     return res.json({ success: true, data: updated });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to submit review decision' });
+    return res.status(500).json({ error: err.message || 'Failed to submit review decision' });
   }
 });
 
@@ -406,7 +408,7 @@ router.post('/evidence/:id/takedown', (req: Request, res: Response) => {
   try {
     const evidence = db.getEvidenceById(req.params.id);
     if (!evidence) {
-      return res.status(404).json({ success: false, error: 'Evidence record not found' });
+      return res.status(404).json({ error: 'Evidence record not found' });
     }
 
     const noticeText = VerifierEngine.generateTakedownNotice(evidence);
@@ -414,7 +416,7 @@ router.post('/evidence/:id/takedown', (req: Request, res: Response) => {
 
     return res.json({ success: true, data: { notice: noticeText, evidenceId: evidence.id } });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to generate takedown notice' });
+    return res.status(500).json({ error: err.message || 'Failed to generate takedown notice' });
   }
 });
 
@@ -427,7 +429,7 @@ router.post('/fixtures/load', (_req: Request, res: Response) => {
     const result = loadOptionalForensicTestSuite();
     return res.json({ success: true, message: 'Optional forensic test suite loaded successfully', ...result });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to load test suite' });
+    return res.status(500).json({ error: err.message || 'Failed to load test suite' });
   }
 });
 
@@ -437,16 +439,14 @@ router.post('/fixtures/clear', (_req: Request, res: Response) => {
     db.clearAll();
     return res.json({ success: true, message: 'Database reset to empty state' });
   } catch (err: any) {
-    return res.status(500).json({ success: false, error: err.message || 'Failed to clear database' });
+    return res.status(500).json({ error: err.message || 'Failed to clear database' });
   }
 });
 
-// Router-level error handler guarantee: Always returns JSON
+// Router-level error handler guarantee: Always returns { error: err.message }
 router.use((err: any, _req: Request, res: Response, _next: NextFunction) => {
   res.setHeader('Content-Type', 'application/json');
-  const status = err.status || err.statusCode || 500;
-  return res.status(status).json({
-    success: false,
+  return res.status(500).json({
     error: err.message || 'Internal API router exception'
   });
 });

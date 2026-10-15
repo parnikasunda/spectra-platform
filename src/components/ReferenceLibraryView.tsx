@@ -8,10 +8,8 @@ import {
   Film, 
   Upload, 
   Link as LinkIcon, 
-  Layers, 
   Trash2, 
   Eye, 
-  CheckCircle2, 
   AlertCircle,
   X,
   FileVideo,
@@ -48,14 +46,14 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
   const [filterType, setFilterType] = useState<string>('ALL');
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
 
-  // Register Modal Form state
+  // Register Modal Form state with clean field naming
   const [regMode, setRegMode] = useState<'upload' | 'url'>('upload');
   const [title, setTitle] = useState('');
   const [rightsHolder, setRightsHolder] = useState('');
   const [assetType, setAssetType] = useState('VOD_FEATURE');
   const [sourceUrl, setSourceUrl] = useState('');
   const [sampleInterval, setSampleInterval] = useState('2');
-  const [notes, setNotes] = useState('');
+  const [auditNotes, setAuditNotes] = useState('');
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
@@ -91,13 +89,21 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
         if (!selectedFile) {
           throw new Error('Please select a video file to upload (MP4, MKV, MOV, WebM)');
         }
+        // 1. FRONTEND FORM ENCODING: Construct a true FormData object with exact field names
         const formData = new FormData();
-        formData.append('mediaFile', selectedFile);
+        formData.append('file', selectedFile);
         formData.append('title', title);
+        formData.append('rightsHolder', rightsHolder);
+        formData.append('assetType', assetType);
+        formData.append('auditNotes', auditNotes);
+        formData.append('sampleInterval', sampleInterval);
+
+        // Include alias field names for comprehensive backend compatibility
         formData.append('rights_holder', rightsHolder);
         formData.append('asset_type', assetType);
+        formData.append('notes', auditNotes);
         formData.append('sample_interval_sec', sampleInterval);
-        if (notes) formData.append('notes', notes);
+        formData.append('mediaFile', selectedFile);
 
         const result = await onRegisterUpload(formData);
         createdItem = result && result.id ? result : null;
@@ -107,11 +113,16 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
         }
         const result = await onRegisterUrl({
           title,
+          rightsHolder,
           rights_holder: rightsHolder,
+          assetType,
           asset_type: assetType,
+          sourceUrl: sourceUrl.trim(),
           source_url: sourceUrl.trim(),
+          sampleInterval: parseFloat(sampleInterval),
           sample_interval_sec: parseFloat(sampleInterval),
-          notes
+          auditNotes,
+          notes: auditNotes
         });
         createdItem = result && result.id ? result : null;
       }
@@ -121,11 +132,11 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
       setRightsHolder('');
       setSourceUrl('');
       setSelectedFile(null);
-      setNotes('');
+      setAuditNotes('');
       onCloseRegisterModal();
       onRefresh();
 
-      // If created item was returned, open its Keyframe Timeline drawer immediately for visual verification
+      // Open Keyframe Timeline drawer for the newly registered reference for immediate visual verification
       if (createdItem && createdItem.id) {
         handleOpenDetails(createdItem);
       }
@@ -513,8 +524,8 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                   <input
                     type="text"
                     disabled={isSubmitting}
-                    value={notes}
-                    onChange={(e) => setNotes(e.target.value)}
+                    value={auditNotes}
+                    onChange={(e) => setAuditNotes(e.target.value)}
                     placeholder="e.g. Master clean feed rights package"
                     className="w-full px-3 py-1.5 bg-slate-950 border border-slate-800 rounded text-xs text-white placeholder-slate-600 focus:outline-none focus:border-cyan-400 disabled:opacity-50"
                   />

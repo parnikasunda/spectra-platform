@@ -12,9 +12,9 @@ import apiRouter from './src/backend/routes.js';
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// 1. INCREASE BODY & MULTIPART PAYLOAD LIMITS (Support media files up to 500MB)
+// 1. INCREASE EXPRESS PAYLOAD LIMITS BEFORE REGISTERING ROUTES (Support media files up to 500MB)
 app.use(express.json({ limit: '500mb' }));
-app.use(express.urlencoded({ extended: true, limit: '500mb' }));
+app.use(express.urlencoded({ limit: '500mb', extended: true }));
 
 // Ensure required upload and media directories exist
 const uploadsDir = path.resolve(process.cwd(), 'uploads');
@@ -44,27 +44,20 @@ app.use('/api', apiRouter);
 app.all('/api/*', (_req: Request, res: Response) => {
   res.setHeader('Content-Type', 'application/json');
   return res.status(404).json({
-    success: false,
     error: `API endpoint not found: ${_req.method} ${_req.originalUrl}`
   });
 });
 
-// Strict JSON global error handler for any uncaught errors in API routing (e.g. 413 Payload Too Large)
-app.use((err: any, req: Request, res: Response, next: NextFunction) => {
+// 4. GUARANTEED JSON ERROR RESPONSES: Catch all exceptions and return res.status(500).json({ error: err.message })
+app.use((err: any, _req: Request, res: Response, next: NextFunction) => {
   if (res.headersSent) {
     return next(err);
   }
   console.error('[Server Error]', err);
   res.setHeader('Content-Type', 'application/json');
-  const status = err.status || err.statusCode || (err.type === 'entity.too.large' ? 413 : 500);
-  const errorMsg = err.type === 'entity.too.large'
-    ? 'Payload too large: media file exceeds maximum allowable limit of 500MB'
-    : (err.message || 'Internal server error');
-
+  const status = err.status || err.statusCode || 500;
   return res.status(status).json({
-    success: false,
-    error: errorMsg,
-    code: err.code || (err.type === 'entity.too.large' ? 'LIMIT_FILE_SIZE' : 'SERVER_ERROR')
+    error: err.message || 'Internal server error'
   });
 });
 

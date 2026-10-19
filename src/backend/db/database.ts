@@ -169,6 +169,11 @@ export class ArgusDatabase {
     try { this.db.exec(`ALTER TABLE candidates ADD COLUMN drm_scheme TEXT`); } catch {}
     try { this.db.exec(`ALTER TABLE evidence_records ADD COLUMN match_classification TEXT`); } catch {}
     try { this.db.exec(`ALTER TABLE evidence_records ADD COLUMN audio_match_json TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE candidates ADD COLUMN media_url TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE candidates ADD COLUMN canonical_url TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE candidates ADD COLUMN platform TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE candidates ADD COLUMN acquisition_status TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE candidates ADD COLUMN frame_evidence TEXT`); } catch {}
   }
 
   // --- Reference Items ---
@@ -357,9 +362,10 @@ export class ArgusDatabase {
         id, job_id, reference_id, source_url, domain, discovered_title,
         discovery_provider, source_category, asset_kind, discovered_at, pipeline_status, reachability_code,
         reachability_latency_ms, media_type, media_resolution, media_duration_sec,
-        is_live_stream, drm_scheme, raw_headers_json, verification_logs, last_inspected_at
+        is_live_stream, drm_scheme, raw_headers_json, verification_logs, last_inspected_at,
+        media_url, canonical_url, platform, acquisition_status, frame_evidence
       ) VALUES (
-        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
       )
     `);
     stmt.run(
@@ -383,7 +389,12 @@ export class ArgusDatabase {
       cand.drm_scheme || null,
       cand.raw_headers_json || null,
       cand.verification_logs || null,
-      cand.last_inspected_at || null
+      cand.last_inspected_at || null,
+      cand.media_url || null,
+      cand.canonical_url || null,
+      cand.platform || null,
+      cand.acquisition_status || null,
+      cand.frame_evidence || null
     );
     return true;
   }
@@ -446,6 +457,26 @@ export class ArgusDatabase {
     if (updates.last_inspected_at !== undefined) {
       fields.push('last_inspected_at = ?');
       values.push(updates.last_inspected_at);
+    }
+    if (updates.media_url !== undefined) {
+      fields.push('media_url = ?');
+      values.push(updates.media_url);
+    }
+    if (updates.canonical_url !== undefined) {
+      fields.push('canonical_url = ?');
+      values.push(updates.canonical_url);
+    }
+    if (updates.platform !== undefined) {
+      fields.push('platform = ?');
+      values.push(updates.platform);
+    }
+    if (updates.acquisition_status !== undefined) {
+      fields.push('acquisition_status = ?');
+      values.push(updates.acquisition_status);
+    }
+    if (updates.frame_evidence !== undefined) {
+      fields.push('frame_evidence = ?');
+      values.push(updates.frame_evidence);
     }
 
     if (fields.length === 0) return;

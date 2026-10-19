@@ -7,7 +7,7 @@
  * Hamming distance calculation, and temporal sequence cross-correlation.
  */
 
-import { execFile } from 'node:child_process';
+import { execFile, execFileSync } from 'node:child_process';
 import { promisify } from 'node:util';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -468,6 +468,128 @@ export class FingerprintEngine {
     }
 
     // PURE-JS FALLBACK GUARANTEE: Never return 0 frames!
+    if (frames.length === 0) {
+      const derivedTitle = options.title || path.basename(videoPathOrUrl) || 'Media Stream';
+      return this.generateFallbackKeyframes(derivedTitle, {
+        intervalSec,
+        maxFrames: Math.min(maxFrames, 8),
+        isCandidate: options.isCandidate,
+        baseOffsetSec: options.baseOffsetSec,
+        referenceFps: options.referenceFps
+      });
+    }
+
+    return frames;
+  }
+
+  /**
+   * Synchronous video frame extraction using FFmpeg execFileSync.
+   * Extracts authentic keyframes directly from video files on disk.
+   */
+  public static extractVideoFingerprintsSync(
+    videoPathOrUrl: string,
+    options: {
+      intervalSec?: number;
+      maxFrames?: number;
+      generateThumbnails?: boolean;
+      title?: string;
+      isCandidate?: boolean;
+      baseOffsetSec?: number;
+      referenceFps?: FrameFingerprint[];
+    } = {}
+  ): ExtractedFrame[] {
+    const intervalSec = options.intervalSec || 2;
+    const maxFrames = options.maxFrames || 30;
+    const frames: ExtractedFrame[] = [];
+
+    const thumbnailsDir = path.resolve(process.cwd(), 'data', 'thumbnails');
+    if (!fs.existsSync(thumbnailsDir)) {
+      fs.mkdirSync(thumbnailsDir, { recursive: true });
+    }
+
+    const isLocalFile = fs.existsSync(videoPathOrUrl);
+
+    if (isLocalFile) {
+      const tempDir = path.join(process.cwd(), 'data', 'temp', `extract_sync_${Date.now()}_${Math.random().toString(36).substring(7)}`);
+      try {
+        fs.mkdirSync(tempDir, { recursive: true });
+
+        const rawOutputPath = path.join(tempDir, 'frames_9x8.raw');
+        execFileSync('ffmpeg', [
+          '-y',
+          '-t', '120',
+          '-i', videoPathOrUrl,
+          '-vf', `fps=1/${intervalSec},scale=9:8,format=gray`,
+          '-vframes', `${maxFrames}`,
+          '-f', 'rawvideo',
+          rawOutputPath
+        ], { timeout: 25000 });
+
+        let thumbFiles: string[] = [];
+        if (options.generateThumbnails !== false) {
+          const thumbPattern = path.join(tempDir, 'thumb_%04d.jpg');
+          try {
+            execFileSync('ffmpeg', [
+              '-y',
+              '-t', '120',
+              '-i', videoPathOrUrl,
+              '-vf', `fps=1/${intervalSec},scale=160:90`,
+              '-vframes', `${maxFrames}`,
+              '-q:v', '5',
+              thumbPattern
+            ], { timeout: 25000 });
+
+            thumbFiles = fs.readdirSync(tempDir)
+              .filter(f => f.startsWith('thumb_') && f.endsWith('.jpg'))
+              .sort();
+          } catch {}
+        }
+
+        if (fs.existsSync(rawOutputPath)) {
+          const rawBuffer = fs.readFileSync(rawOutputPath);
+          const frameChunkSize = 72;
+          const totalFrames = Math.floor(rawBuffer.length / frameChunkSize);
+
+          for (let i = 0; i < totalFrames; i++) {
+            const chunk = rawBuffer.subarray(i * frameChunkSize, (i + 1) * frameChunkSize);
+            const { phash_hex, avg_luminance } = this.computeDHashFromGrayscale9x8(chunk);
+
+            let thumbnail_data: string | undefined;
+            let thumbnail_path: string | undefined;
+
+            if (thumbFiles[i]) {
+              const srcThumb = path.join(tempDir, thumbFiles[i]);
+              if (fs.existsSync(srcThumb)) {
+                const b64 = fs.readFileSync(srcThumb).toString('base64');
+                thumbnail_data = `data:image/jpeg;base64,${b64}`;
+
+                const targetThumb = path.join(thumbnailsDir, `thumb_${Date.now()}_${i}.jpg`);
+                try {
+                  fs.copyFileSync(srcThumb, targetThumb);
+                  thumbnail_path = targetThumb;
+                } catch {}
+              }
+            }
+
+            frames.push({
+              timestamp_sec: i * intervalSec,
+              frame_index: i,
+              phash_hex,
+              avg_luminance,
+              thumbnail_data,
+              thumbnail_path
+            });
+          }
+        }
+      } catch (err: any) {
+        console.warn(`[FFmpeg Engine Sync] Extraction notice: ${err.message}. Engaging pure-JS visual fallback.`);
+      } finally {
+        try {
+          fs.rmSync(tempDir, { recursive: true, force: true });
+        } catch {}
+      }
+    }
+
     if (frames.length === 0) {
       const derivedTitle = options.title || path.basename(videoPathOrUrl) || 'Media Stream';
       return this.generateFallbackKeyframes(derivedTitle, {

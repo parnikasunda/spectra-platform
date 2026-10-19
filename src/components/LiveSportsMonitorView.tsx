@@ -19,6 +19,7 @@ import {
   Zap
 } from 'lucide-react';
 import { CandidateItem, EvidenceRecord, ReferenceItem } from '../types/client.js';
+import { CandidateSourceLink } from './CandidateSourceLink.js';
 
 interface LiveSportsMonitorViewProps {
   references: ReferenceItem[];
@@ -187,13 +188,20 @@ export const LiveSportsMonitorView: React.FC<LiveSportsMonitorViewProps> = ({
                 key={ev.id}
                 className="p-4 hover:bg-slate-800/30 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4"
               >
-                <div className="space-y-1.5">
-                  <div className="flex items-center gap-2 text-xs">
+                <div className="space-y-1.5 flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
                     <span className="font-bold text-white">{ev.reference_title}</span>
                     <span className="text-slate-600">·</span>
                     <span className="text-cyan-400 font-mono">{ev.candidate_domain}</span>
-                    <span className="text-slate-600">·</span>
-                    <span className="text-[11px] font-mono text-slate-400 truncate max-w-sm">{ev.candidate_url}</span>
+                  </div>
+                  <div className="pt-0.5">
+                    <CandidateSourceLink
+                      url={ev.candidate_url}
+                      domain={ev.candidate_domain}
+                      candidateId={ev.candidate_id}
+                      compact={true}
+                      truncateLength={45}
+                    />
                   </div>
 
                   <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 font-mono">

@@ -16,6 +16,7 @@ import {
   Database
 } from 'lucide-react';
 import { SystemStats, EvidenceRecord } from '../types/client.js';
+import { CandidateSourceLink } from './CandidateSourceLink.js';
 
 interface OverviewViewProps {
   stats: SystemStats | null;
@@ -236,13 +237,20 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
                 onClick={() => onSelectEvidence(ev)}
                 className="py-3.5 flex flex-col md:flex-row md:items-center justify-between gap-4 hover:bg-slate-800/30 px-3 rounded cursor-pointer transition-colors"
               >
-                <div className="space-y-1">
-                  <div className="flex items-center gap-2 text-xs">
+                <div className="space-y-1 flex-1 min-w-0">
+                  <div className="flex flex-wrap items-center gap-2 text-xs">
                     <span className="font-semibold text-white">{ev.reference_title}</span>
                     <span className="text-slate-600">·</span>
                     <span className="text-slate-400">{ev.candidate_domain}</span>
-                    <span className="text-slate-600">·</span>
-                    <span className="font-mono text-slate-400 text-[11px] truncate max-w-xs">{ev.candidate_url}</span>
+                  </div>
+                  <div className="pt-0.5">
+                    <CandidateSourceLink
+                      url={ev.candidate_url}
+                      domain={ev.candidate_domain}
+                      candidateId={ev.candidate_id}
+                      compact={true}
+                      truncateLength={40}
+                    />
                   </div>
                   <div className="flex items-center gap-3 text-xs text-slate-400 font-mono">
                     <span>Confidence: {(ev.confidence_score * 100).toFixed(1)}%</span>

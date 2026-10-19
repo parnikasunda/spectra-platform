@@ -20,10 +20,12 @@ import {
   Hash,
   Eye,
   Sliders,
-  X
+  X,
+  AlertCircle
 } from 'lucide-react';
 import { EvidenceRecord, MatchedKeyframePair, ReviewDecision } from '../types/client.js';
 import { submitEvidenceReview, generateTakedownNotice } from '../api.js';
+import { CandidateSourceLink } from './CandidateSourceLink.js';
 
 interface EvidenceVaultViewProps {
   evidenceRecords: EvidenceRecord[];
@@ -46,6 +48,8 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
   const [takedownModalOpen, setTakedownModalOpen] = useState(false);
   const [takedownText, setTakedownText] = useState('');
   const [copiedNotice, setCopiedNotice] = useState(false);
+  const [refImgFailed, setRefImgFailed] = useState<Record<number, boolean>>({});
+  const [candImgFailed, setCandImgFailed] = useState<Record<number, boolean>>({});
 
   const activeEvidence = selectedEvidence || (evidenceRecords.length > 0 ? evidenceRecords[0] : null);
 
@@ -151,8 +155,14 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
                         </span>
                       </div>
 
-                      <div className="text-[11px] font-mono text-cyan-400 truncate">
-                        {ev.candidate_domain}
+                      <div className="pt-0.5">
+                        <CandidateSourceLink
+                          url={ev.candidate_url}
+                          domain={ev.candidate_domain}
+                          candidateId={ev.candidate_id}
+                          compact={true}
+                          truncateLength={26}
+                        />
                       </div>
 
                       {/* Clean metadata without pill boxes */}
@@ -226,6 +236,24 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
                   </div>
                 </div>
 
+                {/* Candidate Investigation Target & Source Navigation */}
+                <div className="p-3 bg-slate-950 rounded border border-slate-800 space-y-2">
+                  <div className="flex items-center justify-between text-xs font-mono">
+                    <span className="text-slate-400 uppercase text-[10px] font-semibold">Examined Candidate Target</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-500 text-[10px]">Candidate ID:</span>
+                      <span className="text-cyan-400 font-bold">{activeEvidence.candidate_id}</span>
+                    </div>
+                  </div>
+                  <CandidateSourceLink
+                    url={activeEvidence.candidate_url}
+                    domain={activeEvidence.candidate_domain}
+                    candidateId={activeEvidence.candidate_id}
+                    showCopy={true}
+                    showOpenButton={true}
+                  />
+                </div>
+
                 {/* Cryptographic Custody Seal */}
                 <div className="p-3 bg-slate-950 rounded border border-slate-800 flex items-center justify-between gap-3 text-xs font-mono">
                   <div className="flex items-center gap-2 overflow-hidden">
@@ -251,7 +279,7 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
                         <button
                           key={idx}
                           onClick={() => setActiveFrameIndex(idx)}
-                          className={`w-6 h-6 rounded flex items-center justify-center font-bold transition-colors ${
+                          className={`w-6 h-6 rounded flex items-center justify-center font-bold transition-colors cursor-pointer ${
                             activeFrameIndex === idx 
                               ? 'bg-cyan-400 text-slate-950' 
                               : 'bg-slate-800 text-slate-300 hover:bg-slate-700'
@@ -271,27 +299,32 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
                       <div className="space-y-2 p-3 bg-slate-950 rounded border border-slate-800">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-semibold text-white">Official Reference Master</span>
-                          <span className="text-cyan-400 font-mono text-[11px]">{currentPair.reference_timestamp_sec.toFixed(1)}s</span>
+                          <span className="text-cyan-400 font-mono text-[11px]">t = {currentPair.reference_timestamp_sec.toFixed(1)}s</span>
                         </div>
 
-                        <div className="aspect-video bg-slate-900 rounded overflow-hidden flex items-center justify-center relative">
-                          {currentPair.reference_thumbnail ? (
+                        <div className="aspect-video bg-slate-900 rounded overflow-hidden flex items-center justify-center relative border border-slate-800">
+                          {currentPair.reference_thumbnail && !refImgFailed[activeFrameIndex] && !currentPair.reference_thumbnail.includes('Patient Zero Title Card') ? (
                             <img 
                               src={currentPair.reference_thumbnail} 
-                              alt="Reference frame" 
+                              alt={`Reference frame at ${currentPair.reference_timestamp_sec}s`} 
                               className="w-full h-full object-cover"
                               referrerPolicy="no-referrer"
+                              onError={() => setRefImgFailed(prev => ({ ...prev, [activeFrameIndex]: true }))}
                             />
                           ) : (
-                            <span className="text-xs text-slate-400 font-mono">Reference Frame</span>
+                            <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-slate-950 text-slate-400 space-y-1">
+                              <AlertCircle className="w-6 h-6 text-amber-400 shrink-0" />
+                              <span className="font-semibold text-xs text-white">Missing Reference Evidence</span>
+                              <span className="text-[10px] text-slate-500 font-mono">Original frame file missing or extraction failed</span>
+                            </div>
                           )}
-                          <span className="absolute top-2 left-2 bg-black/80 px-1.5 py-0.5 rounded text-[10px] font-mono text-white">
+                          <span className="absolute top-2 left-2 bg-black/80 px-1.5 py-0.5 rounded text-[10px] font-mono text-cyan-300 border border-cyan-800/60">
                             REF MASTER
                           </span>
                         </div>
 
-                        <div className="text-[10px] font-mono bg-slate-900 p-1.5 rounded border border-slate-800 text-slate-300 break-all">
-                          dHash: {currentPair.reference_phash}
+                        <div className="text-[10px] font-mono bg-slate-900 p-1.5 rounded border border-slate-800 text-slate-300 break-all flex items-center justify-between">
+                          <span>dHash: <strong className="text-cyan-300">{currentPair.reference_phash}</strong></span>
                         </div>
                       </div>
 
@@ -299,27 +332,32 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
                       <div className="space-y-2 p-3 bg-slate-950 rounded border border-slate-800">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-semibold text-white">Detected Candidate Stream</span>
-                          <span className="text-cyan-400 font-mono text-[11px]">{currentPair.candidate_timestamp_sec.toFixed(1)}s</span>
+                          <span className="text-cyan-400 font-mono text-[11px]">t = {currentPair.candidate_timestamp_sec.toFixed(1)}s</span>
                         </div>
 
-                        <div className="aspect-video bg-slate-900 rounded overflow-hidden flex items-center justify-center relative">
-                          {currentPair.candidate_thumbnail ? (
+                        <div className="aspect-video bg-slate-900 rounded overflow-hidden flex items-center justify-center relative border border-slate-800">
+                          {currentPair.candidate_thumbnail && !candImgFailed[activeFrameIndex] ? (
                             <img 
                               src={currentPair.candidate_thumbnail} 
-                              alt="Candidate frame" 
+                              alt={`Candidate frame at ${currentPair.candidate_timestamp_sec}s`} 
                               className="w-full h-full object-cover"
                               referrerPolicy="no-referrer"
+                              onError={() => setCandImgFailed(prev => ({ ...prev, [activeFrameIndex]: true }))}
                             />
                           ) : (
-                            <span className="text-xs text-slate-400 font-mono">Candidate Stream Frame</span>
+                            <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-slate-950 text-slate-400 space-y-1">
+                              <AlertCircle className="w-6 h-6 text-amber-400 shrink-0" />
+                              <span className="font-semibold text-xs text-white">Candidate Frame Unavailable</span>
+                              <span className="text-[10px] text-slate-500 font-mono">Stream media acquisition pending or blocked</span>
+                            </div>
                           )}
                           <span className="absolute top-2 left-2 bg-amber-950/80 border border-amber-600/50 px-1.5 py-0.5 rounded text-[10px] font-mono text-amber-300">
-                            CANDIDATE
+                            CANDIDATE STREAM
                           </span>
                         </div>
 
-                        <div className="text-[10px] font-mono bg-slate-900 p-1.5 rounded border border-slate-800 text-slate-300 break-all">
-                          dHash: {currentPair.candidate_phash}
+                        <div className="text-[10px] font-mono bg-slate-900 p-1.5 rounded border border-slate-800 text-slate-300 break-all flex items-center justify-between">
+                          <span>dHash: <strong className="text-amber-300">{currentPair.candidate_phash}</strong></span>
                         </div>
                       </div>
                     </div>

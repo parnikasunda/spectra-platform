@@ -54,6 +54,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [filterType, setFilterType] = useState<string>('ALL');
   const [copiedHash, setCopiedHash] = useState<string | null>(null);
+  const [failedThumbnails, setFailedThumbnails] = useState<Record<string, boolean>>({});
 
   // Upload configuration
   const [uploadConfig, setUploadConfig] = useState<UploadConfig>({
@@ -379,15 +380,18 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                     >
                       {/* Frame Thumbnail */}
                       <div className="w-28 h-16 bg-slate-900 rounded overflow-hidden shrink-0 border border-slate-800 relative">
-                        {fp.thumbnail_data ? (
+                        {fp.thumbnail_data && !failedThumbnails[fp.id || `${idx}`] && !fp.thumbnail_data.includes('Patient Zero Title Card') ? (
                           <img 
                             src={fp.thumbnail_data} 
-                            alt={`Frame @ ${fp.timestamp_sec}s`}
+                            alt={`Decoded Reference Frame @ ${fp.timestamp_sec}s`}
                             className="w-full h-full object-cover" 
+                            referrerPolicy="no-referrer"
+                            onError={() => setFailedThumbnails(prev => ({ ...prev, [fp.id || `${idx}`]: true }))}
                           />
                         ) : (
-                          <div className="w-full h-full flex items-center justify-center text-slate-700">
-                            <Film className="w-5 h-5" />
+                          <div className="w-full h-full flex flex-col items-center justify-center p-1 text-center bg-slate-950 text-slate-400">
+                            <AlertCircle className="w-4 h-4 text-amber-400 mb-0.5 shrink-0" />
+                            <span className="text-[9px] font-mono text-amber-300">Frame Unavailable</span>
                           </div>
                         )}
                         <span className="absolute bottom-1 right-1 px-1 py-0.2 bg-black/80 font-mono text-[9px] text-slate-300 rounded">

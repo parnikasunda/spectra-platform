@@ -20,6 +20,7 @@ import {
   Globe
 } from 'lucide-react';
 import { CandidateItem, PipelineStatus, ReferenceItem } from '../types/client.js';
+import { CandidateSourceLink } from './CandidateSourceLink.js';
 
 interface CandidateMatrixViewProps {
   candidates: CandidateItem[];
@@ -228,46 +229,93 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
             <table className="w-full text-left text-xs">
               <thead className="bg-slate-950/60 text-slate-400 border-b border-slate-800 font-mono">
                 <tr>
-                  <th className="py-2.5 px-4 font-medium">Domain / Source</th>
-                  <th className="py-2.5 px-4 font-medium">Discovery Provider</th>
+                  <th className="py-2.5 px-4 font-medium">Candidate Source & Page</th>
+                  <th className="py-2.5 px-4 font-medium">Type / Platform</th>
                   <th className="py-2.5 px-4 font-medium">Pipeline Status</th>
                   <th className="py-2.5 px-4 font-medium">HTTP Code</th>
                   <th className="py-2.5 px-4 font-medium">Latency</th>
-                  <th className="py-2.5 px-4 font-medium">Media Type</th>
+                  <th className="py-2.5 px-4 font-medium">Stream Resource</th>
                   <th className="py-2.5 px-4 font-medium text-right">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50">
                 {filteredCandidates.map((cand) => (
                   <tr key={cand.id} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-3 px-4 max-w-sm">
-                      <div className="font-semibold text-white">{cand.domain}</div>
-                      <div className="text-[11px] font-mono text-slate-400 truncate max-w-xs" title={cand.source_url}>
-                        {cand.source_url}
+                    <td className="py-3 px-4 max-w-md">
+                      <div className="flex items-center gap-2">
+                        <span className="font-semibold text-white truncate" title={cand.discovered_title || cand.domain}>
+                          {cand.discovered_title || cand.domain}
+                        </span>
+                        {cand.platform && (
+                          <span className="px-1.5 py-0.2 bg-slate-800 text-[10px] text-cyan-300 font-mono rounded">
+                            {cand.platform}
+                          </span>
+                        )}
+                      </div>
+                      <div className="mt-1">
+                        <CandidateSourceLink
+                          url={cand.source_url}
+                          mediaUrl={cand.media_url}
+                          canonicalUrl={cand.canonical_url}
+                          domain={cand.domain}
+                          compact={true}
+                          truncateLength={36}
+                        />
+                      </div>
+                      <div className="flex items-center gap-2 text-[10px] font-mono text-slate-500 mt-0.5">
+                        <span>ID: {cand.id}</span>
+                        {cand.reference_id && (
+                          <>
+                            <span>·</span>
+                            <span className="text-slate-400">Ref: {cand.reference_id}</span>
+                          </>
+                        )}
                       </div>
                     </td>
-                    <td className="py-3 px-4 font-mono text-[11px] text-cyan-400">
-                      {cand.discovery_provider}
+                    <td className="py-3 px-4 font-mono text-[11px]">
+                      <div className="text-cyan-400 font-semibold">{cand.source_category || cand.discovery_provider}</div>
+                      <div className="text-[10px] text-slate-500">{cand.asset_kind || 'DISCOVERED_PAGE'}</div>
                     </td>
                     <td className="py-3 px-4">
                       {getStatusBadge(cand.pipeline_status)}
+                      {cand.acquisition_status && cand.acquisition_status !== 'PENDING' && (
+                        <div className="text-[10px] font-mono text-slate-400 mt-0.5">
+                          {cand.acquisition_status}
+                        </div>
+                      )}
                     </td>
                     <td className="py-3 px-4 font-mono tabular-nums">
                       {cand.reachability_code > 0 ? (
-                        <span className={cand.reachability_code === 200 ? 'text-emerald-400' : 'text-rose-400'}>
+                        <span className={cand.reachability_code === 200 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
                           {cand.reachability_code}
                         </span>
                       ) : (
-                        <span className="text-slate-400">—</span>
+                        <span className="text-slate-500">—</span>
                       )}
                     </td>
                     <td className="py-3 px-4 font-mono text-slate-400 tabular-nums">
                       {cand.reachability_latency_ms > 0 ? `${cand.reachability_latency_ms.toFixed(1)}ms` : '—'}
                     </td>
                     <td className="py-3 px-4 font-mono text-slate-300 text-[11px]">
-                      {cand.media_type}
+                      <div>{cand.media_type}</div>
+                      {cand.media_resolution && (
+                        <div className="text-[10px] text-slate-500">{cand.media_resolution}</div>
+                      )}
                     </td>
-                    <td className="py-3 px-4 text-right space-x-2 whitespace-nowrap">
+                    <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
+                      {cand.source_url && (
+                        <a
+                          href={cand.source_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-800/40 rounded transition-colors"
+                          title="Open discovered source webpage"
+                        >
+                          <span>Open</span>
+                          <ExternalLink className="w-3 h-3" />
+                        </a>
+                      )}
+
                       <button
                         onClick={() => setSelectedCandidate(cand)}
                         className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors cursor-pointer"
@@ -279,9 +327,9 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
                       <button
                         onClick={() => handleVerify(cand)}
                         disabled={verifyingId === cand.id}
-                        className="px-2.5 py-1 text-[11px] font-medium text-slate-900 bg-cyan-400 hover:bg-cyan-300 rounded transition-colors disabled:opacity-50 cursor-pointer"
+                        className="px-2.5 py-1 text-[11px] font-medium text-slate-900 bg-cyan-400 hover:bg-cyan-300 rounded transition-colors disabled:opacity-50 cursor-pointer font-sans"
                       >
-                        {verifyingId === cand.id ? 'Verifying...' : 'Verify & Match'}
+                        {verifyingId === cand.id ? 'Verifying...' : 'Verify'}
                       </button>
                     </td>
                   </tr>
@@ -295,22 +343,43 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
       {/* Diagnostics Drawer / Modal */}
       {selectedCandidate && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-sm flex items-center justify-center p-4">
-          <div className="bg-slate-900 border border-slate-800 rounded-lg max-w-3xl w-full max-h-[85vh] flex flex-col shadow-2xl">
+          <div className="bg-slate-900 border border-slate-800 rounded-lg max-w-3xl w-full max-h-[90vh] flex flex-col shadow-2xl overflow-hidden">
             <div className="p-4 border-b border-slate-800 flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-semibold text-white">
-                  Technical Diagnostics: {selectedCandidate.domain}
+                  Candidate Diagnostics: {selectedCandidate.discovered_title || selectedCandidate.domain}
                 </h3>
-                <p className="text-xs text-slate-400 font-mono mt-0.5 truncate max-w-md">
-                  {selectedCandidate.source_url}
-                </p>
+                <div className="text-xs text-slate-400 font-mono mt-0.5 flex items-center gap-2">
+                  <span>Candidate ID: {selectedCandidate.id}</span>
+                  {selectedCandidate.reference_id && (
+                    <>
+                      <span>·</span>
+                      <span className="text-cyan-400">Content Ref: {selectedCandidate.reference_id}</span>
+                    </>
+                  )}
+                </div>
               </div>
-              <button onClick={() => setSelectedCandidate(null)} className="text-slate-400 hover:text-white p-1">
+              <button onClick={() => setSelectedCandidate(null)} className="text-slate-400 hover:text-white p-1 cursor-pointer">
                 <X className="w-4 h-4" />
               </button>
             </div>
 
             <div className="p-6 overflow-y-auto space-y-4 flex-1 font-mono text-xs">
+              {/* Comprehensive Clickable Source Link Section */}
+              <div className="space-y-1.5">
+                <div className="text-[11px] text-slate-400 font-semibold uppercase">Source Investigation Endpoints</div>
+                <CandidateSourceLink
+                  url={selectedCandidate.source_url}
+                  mediaUrl={selectedCandidate.media_url}
+                  canonicalUrl={selectedCandidate.canonical_url}
+                  domain={selectedCandidate.domain}
+                  title={selectedCandidate.discovered_title}
+                  candidateId={selectedCandidate.id}
+                  showCopy={true}
+                  showOpenButton={true}
+                />
+              </div>
+
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="p-2.5 bg-slate-950 rounded border border-slate-800">
                   <div className="text-[10px] text-slate-400">PIPELINE STATUS</div>
@@ -325,8 +394,23 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
                   <div className="text-slate-200 font-bold mt-0.5">{selectedCandidate.reachability_latency_ms.toFixed(1)} ms</div>
                 </div>
                 <div className="p-2.5 bg-slate-950 rounded border border-slate-800">
-                  <div className="text-[10px] text-slate-400">STREAM TYPE</div>
-                  <div className="text-slate-200 font-bold mt-0.5">{selectedCandidate.media_type}</div>
+                  <div className="text-[10px] text-slate-400">ACQUISITION STATUS</div>
+                  <div className="text-cyan-300 font-bold mt-0.5">{selectedCandidate.acquisition_status || 'PENDING'}</div>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                <div className="p-2 bg-slate-950 rounded border border-slate-800">
+                  <div className="text-[10px] text-slate-500">PLATFORM / DOMAIN</div>
+                  <div className="text-slate-300 mt-0.5">{selectedCandidate.platform || selectedCandidate.domain}</div>
+                </div>
+                <div className="p-2 bg-slate-950 rounded border border-slate-800">
+                  <div className="text-[10px] text-slate-500">MEDIA RESOLUTION & FPS</div>
+                  <div className="text-slate-300 mt-0.5">{selectedCandidate.media_resolution || 'N/A'} {selectedCandidate.media_fps ? `@ ${selectedCandidate.media_fps}fps` : ''}</div>
+                </div>
+                <div className="p-2 bg-slate-950 rounded border border-slate-800">
+                  <div className="text-[10px] text-slate-500">DISCOVERED TIMESTAMP</div>
+                  <div className="text-slate-300 mt-0.5">{new Date(selectedCandidate.discovered_at).toLocaleString()}</div>
                 </div>
               </div>
 
@@ -358,14 +442,14 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
                       setSelectedCandidate(null);
                       onNavigateToEvidence();
                     }}
-                    className="px-3 py-1.5 text-xs text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded font-medium transition-colors"
+                    className="px-3 py-1.5 text-xs text-slate-950 bg-cyan-400 hover:bg-cyan-300 rounded font-medium transition-colors cursor-pointer"
                   >
                     View Forensic Evidence
                   </button>
                 )}
                 <button
                   onClick={() => setSelectedCandidate(null)}
-                  className="px-3 py-1.5 text-xs text-white bg-slate-800 hover:bg-slate-700 rounded transition-colors"
+                  className="px-3 py-1.5 text-xs text-white bg-slate-800 hover:bg-slate-700 rounded transition-colors cursor-pointer"
                 >
                   Close Diagnostics
                 </button>

@@ -108,6 +108,11 @@ export interface CandidateItem {
   job_id?: string;
   reference_id?: string;
   source_url: string;
+  media_url?: string;
+  canonical_url?: string;
+  platform?: string;
+  acquisition_status?: string;
+  frame_evidence?: string;
   domain: string;
   discovered_title: string;
   discovery_provider: DiscoveryProvider;

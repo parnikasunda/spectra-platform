@@ -657,6 +657,20 @@ router.get('/candidates', (req: Request, res: Response) => {
   }
 });
 
+router.get('/candidates/:id', (req: Request, res: Response) => {
+  res.setHeader('Content-Type', 'application/json');
+  try {
+    const cand = db.getCandidateById(req.params.id);
+    if (!cand) {
+      return res.status(404).json({ error: 'Candidate not found' });
+    }
+    const fingerprints = db.getCandidateFingerprints(cand.id);
+    return res.json({ success: true, data: { ...cand, fingerprints } });
+  } catch (err: any) {
+    return res.status(500).json({ error: err.message || 'Failed to retrieve candidate details' });
+  }
+});
+
 router.post('/candidates/verify/:id', async (req: Request, res: Response) => {
   res.setHeader('Content-Type', 'application/json');
   try {

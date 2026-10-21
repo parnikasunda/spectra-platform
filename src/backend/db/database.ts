@@ -174,6 +174,62 @@ export class ArgusDatabase {
     try { this.db.exec(`ALTER TABLE candidates ADD COLUMN platform TEXT`); } catch {}
     try { this.db.exec(`ALTER TABLE candidates ADD COLUMN acquisition_status TEXT`); } catch {}
     try { this.db.exec(`ALTER TABLE candidates ADD COLUMN frame_evidence TEXT`); } catch {}
+
+    // Strictly purge any legacy synthetic SVG thumbnails or placeholder graphics from existing databases
+    try {
+      this.db.exec(`UPDATE reference_items SET thumbnail_url = NULL WHERE thumbnail_url LIKE 'data:image/svg%' OR thumbnail_url LIKE '%<svg%' OR thumbnail_url LIKE '%.svg'`);
+      this.db.exec(`UPDATE reference_fingerprints SET thumbnail_data = NULL WHERE thumbnail_data LIKE 'data:image/svg%' OR thumbnail_data LIKE '%<svg%' OR thumbnail_data LIKE '%.svg'`);
+      this.db.exec(`UPDATE candidate_fingerprints SET thumbnail_data = NULL WHERE thumbnail_data LIKE 'data:image/svg%' OR thumbnail_data LIKE '%<svg%' OR thumbnail_data LIKE '%.svg'`);
+      
+      const evRows = this.db.prepare(`SELECT id, sample_pairs_json FROM evidence_records`).all() as any[];
+      for (const ev of evRows) {
+        if (!ev.sample_pairs_json) continue;
+        try {
+          const pairs = JSON.parse(ev.sample_pairs_json);
+          let modified = false;
+          for (const p of pairs) {
+            if (typeof p.reference_thumbnail === 'string' && (p.reference_thumbnail.startsWith('data:image/svg') || p.reference_thumbnail.includes('<svg') || p.reference_thumbnail.includes('Pitch Cam') || p.reference_thumbnail.includes('Center Circle') || p.reference_thumbnail.includes('Title Card'))) {
+              p.reference_thumbnail = undefined;
+              modified = true;
+            }
+            if (typeof p.candidate_thumbnail === 'string' && (p.candidate_thumbnail.startsWith('data:image/svg') || p.candidate_thumbnail.includes('<svg') || p.candidate_thumbnail.includes('Pitch Cam') || p.candidate_thumbnail.includes('Center Circle') || p.candidate_thumbnail.includes('Title Card'))) {
+              p.candidate_thumbnail = undefined;
+              modified = true;
+            }
+          }
+          if (modified) {
+            this.db.prepare(`UPDATE evidence_records SET sample_pairs_json = ? WHERE id = ?`).run(JSON.stringify(pairs), ev.id);
+          }
+        } catch {}
+      }
+    } catch (err: any) {
+      console.warn('[DB Migration] SVG cleanup notice:', err.message);
+    }
+  }
+
+  private sanitizeSamplePairs(raw: any[]): MatchedKeyframePair[] {
+    if (!Array.isArray(raw)) return [];
+    return raw.map(p => {
+      let refThumb = p.reference_thumbnail;
+      let candThumb = p.candidate_thumbnail;
+      if (typeof refThumb === 'string') {
+        const lower = refThumb.toLowerCase();
+        if (lower.startsWith('data:image/svg') || lower.includes('<svg') || lower.endsWith('.svg') || lower.includes('pitch cam') || lower.includes('center circle') || lower.includes('title card')) {
+          refThumb = undefined;
+        }
+      }
+      if (typeof candThumb === 'string') {
+        const lower = candThumb.toLowerCase();
+        if (lower.startsWith('data:image/svg') || lower.includes('<svg') || lower.endsWith('.svg') || lower.includes('pitch cam') || lower.includes('center circle') || lower.includes('title card')) {
+          candThumb = undefined;
+        }
+      }
+      return {
+        ...p,
+        reference_thumbnail: refThumb,
+        candidate_thumbnail: candThumb
+      };
+    });
   }
 
   // --- Reference Items ---
@@ -613,7 +669,7 @@ export class ArgusDatabase {
     const rows = (params.length ? stmt.all(...params) : stmt.all()) as any[];
     return rows.map(r => ({
       ...r,
-      sample_pairs: JSON.parse(r.sample_pairs_json || '[]'),
+      sample_pairs: this.sanitizeSamplePairs(JSON.parse(r.sample_pairs_json || '[]')),
       audio_match: r.audio_match_json ? JSON.parse(r.audio_match_json) : undefined
     }));
   }
@@ -624,7 +680,7 @@ export class ArgusDatabase {
     if (!row) return null;
     return {
       ...row,
-      sample_pairs: JSON.parse(row.sample_pairs_json || '[]'),
+      sample_pairs: this.sanitizeSamplePairs(JSON.parse(row.sample_pairs_json || '[]')),
       audio_match: row.audio_match_json ? JSON.parse(row.audio_match_json) : undefined
     };
   }

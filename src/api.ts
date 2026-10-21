@@ -311,6 +311,11 @@ export async function fetchCandidates(filter?: { referenceId?: string; status?: 
   return await parseJsonResponse<CandidateItem[]>(res);
 }
 
+export async function fetchCandidateById(candidateId: string): Promise<CandidateItem & { fingerprints?: FrameFingerprint[] }> {
+  const res = await fetch(`/api/candidates/${candidateId}`);
+  return await parseJsonResponse<CandidateItem & { fingerprints?: FrameFingerprint[] }>(res);
+}
+
 export async function verifyCandidate(candidateId: string, targetReferenceId?: string): Promise<{ candidate: CandidateItem; evidenceRecord?: EvidenceRecord }> {
   const res = await fetch(`/api/candidates/verify/${candidateId}`, {
     method: 'POST',

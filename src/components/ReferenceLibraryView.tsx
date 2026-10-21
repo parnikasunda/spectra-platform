@@ -40,6 +40,22 @@ interface ReferenceLibraryViewProps {
   onOpenRegisterModal: () => void;
 }
 
+const isAuthenticDecodedFrame = (thumb?: string): boolean => {
+  if (!thumb) return false;
+  const lower = thumb.toLowerCase();
+  if (lower.startsWith('data:image/svg') || lower.includes('<svg') || lower.endsWith('.svg')) return false;
+  if (lower.includes('pitch cam') || lower.includes('center circle') || lower.includes('title card')) return false;
+  return lower.startsWith('data:image/jpeg') || 
+         lower.startsWith('data:image/jpg') || 
+         lower.startsWith('data:image/png') || 
+         lower.startsWith('data:image/webp') || 
+         lower.startsWith('/thumbnails/') || 
+         lower.startsWith('/media/') || 
+         lower.startsWith('/uploads/') || 
+         lower.startsWith('http://') || 
+         lower.startsWith('https://');
+};
+
 export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
   references,
   onRefresh,
@@ -253,16 +269,16 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
             >
               {/* Thumbnail Header with Metadata Overlay */}
               <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden border-b border-slate-800/60">
-                {ref.first_thumbnail ? (
+                {(ref.thumbnail_url || ref.first_thumbnail) && isAuthenticDecodedFrame(ref.thumbnail_url || ref.first_thumbnail) ? (
                   <img 
-                    src={ref.first_thumbnail} 
+                    src={ref.thumbnail_url || ref.first_thumbnail} 
                     alt={ref.title} 
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   />
                 ) : (
                   <div className="text-slate-700 flex flex-col items-center gap-1">
-                    <FileVideo className="w-8 h-8" />
-                    <span className="text-[10px] uppercase font-mono">Perceptual Keyframe</span>
+                    <FileVideo className="w-8 h-8 opacity-40 text-slate-500" />
+                    <span className="text-[10px] uppercase font-mono text-slate-500">Video Master Registered</span>
                   </div>
                 )}
                 
@@ -380,7 +396,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                     >
                       {/* Frame Thumbnail */}
                       <div className="w-28 h-16 bg-slate-900 rounded overflow-hidden shrink-0 border border-slate-800 relative">
-                        {fp.thumbnail_data && !failedThumbnails[fp.id || `${idx}`] && !fp.thumbnail_data.includes('Patient Zero Title Card') ? (
+                        {fp.thumbnail_data && isAuthenticDecodedFrame(fp.thumbnail_data) && !failedThumbnails[fp.id || `${idx}`] ? (
                           <img 
                             src={fp.thumbnail_data} 
                             alt={`Decoded Reference Frame @ ${fp.timestamp_sec}s`}

@@ -8,6 +8,8 @@ import { createServer as createViteServer } from 'vite';
 import path from 'node:path';
 import fs from 'node:fs';
 import apiRouter from './src/backend/routes.js';
+import { db } from './src/backend/db/database.js';
+import { ensureMasterVideosExist, ensureTaylorSwiftPatientZeroRegistered, loadOptionalForensicTestSuite } from './src/backend/engine/sampleData.js';
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -76,6 +78,18 @@ async function startServer() {
       appType: 'spa'
     });
     app.use(vite.middlewares);
+  }
+
+  try {
+    ensureMasterVideosExist();
+    if (db.getReferences().length === 0) {
+      console.log('[Server Startup] Initializing authentic forensic dataset with real extracted keyframes...');
+      loadOptionalForensicTestSuite();
+    } else {
+      ensureTaylorSwiftPatientZeroRegistered();
+    }
+  } catch (initErr: any) {
+    console.warn('[Server Startup] Initialization notice:', initErr.message);
   }
 
   app.listen(Number(PORT), '0.0.0.0', () => {

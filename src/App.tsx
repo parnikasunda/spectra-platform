@@ -70,7 +70,10 @@ export default function App() {
       setCandidates(c);
       setEvidenceRecords(e);
       if (e.length > 0 && !selectedEvidence) {
-        setSelectedEvidence(e[0]);
+        const preferred = e.find(item => item.id === 'ev_ts_youtube_fullcopy') || 
+                          e.find(item => item.sample_pairs && item.sample_pairs.length > 0) || 
+                          e[0];
+        setSelectedEvidence(preferred);
       }
     } catch (err) {
       console.error('Failed to load system state:', err);

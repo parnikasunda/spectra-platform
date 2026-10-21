@@ -17,10 +17,30 @@ import {
   Terminal, 
   X,
   Play,
-  Globe
+  Globe,
+  AlertCircle,
+  Loader2,
+  FileVideo
 } from 'lucide-react';
-import { CandidateItem, PipelineStatus, ReferenceItem } from '../types/client.js';
+import { CandidateItem, PipelineStatus, ReferenceItem, FrameFingerprint } from '../types/client.js';
+import { fetchCandidateById } from '../api.js';
 import { CandidateSourceLink } from './CandidateSourceLink.js';
+
+const isAuthenticDecodedFrame = (thumb?: string): boolean => {
+  if (!thumb) return false;
+  const lower = thumb.toLowerCase();
+  if (lower.startsWith('data:image/svg') || lower.includes('<svg') || lower.endsWith('.svg')) return false;
+  if (lower.includes('pitch cam') || lower.includes('center circle') || lower.includes('title card')) return false;
+  return lower.startsWith('data:image/jpeg') || 
+         lower.startsWith('data:image/jpg') || 
+         lower.startsWith('data:image/png') || 
+         lower.startsWith('data:image/webp') || 
+         lower.startsWith('/thumbnails/') || 
+         lower.startsWith('/media/') || 
+         lower.startsWith('/uploads/') || 
+         lower.startsWith('http://') || 
+         lower.startsWith('https://');
+};
 
 interface CandidateMatrixViewProps {
   candidates: CandidateItem[];
@@ -43,6 +63,22 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
   const [searchQuery, setSearchQuery] = useState('');
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [candidateDetails, setCandidateDetails] = useState<(CandidateItem & { fingerprints?: FrameFingerprint[] }) | null>(null);
+  const [isLoadingDetails, setIsLoadingDetails] = useState(false);
+  const [failedThumbnails, setFailedThumbnails] = useState<Record<string, boolean>>({});
+
+  React.useEffect(() => {
+    if (selectedCandidate) {
+      setIsLoadingDetails(true);
+      fetchCandidateById(selectedCandidate.id)
+        .then(data => setCandidateDetails(data))
+        .catch(() => setCandidateDetails(selectedCandidate))
+        .finally(() => setIsLoadingDetails(false));
+    } else {
+      setCandidateDetails(null);
+      setFailedThumbnails({});
+    }
+  }, [selectedCandidate?.id]);
 
   // Quick inspect state
   const [quickUrl, setQuickUrl] = useState('');
@@ -412,6 +448,82 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
                   <div className="text-[10px] text-slate-500">DISCOVERED TIMESTAMP</div>
                   <div className="text-slate-300 mt-0.5">{new Date(selectedCandidate.discovered_at).toLocaleString()}</div>
                 </div>
+              </div>
+
+              {/* Candidate Keyframes Forensic Section */}
+              <div className="space-y-2">
+                <div className="flex items-center justify-between">
+                  <div className="text-[11px] text-slate-400 font-semibold uppercase flex items-center gap-1.5">
+                    <FileVideo className="w-3.5 h-3.5 text-cyan-400" />
+                    <span>Candidate Visual Keyframes &amp; Hashes</span>
+                  </div>
+                  {candidateDetails?.fingerprints && candidateDetails.fingerprints.length > 0 && (
+                    <span className="text-[10px] text-cyan-400 font-mono">
+                      {candidateDetails.fingerprints.length} keyframes extracted
+                    </span>
+                  )}
+                </div>
+
+                {isLoadingDetails ? (
+                  <div className="p-6 bg-slate-950 rounded border border-slate-800 flex items-center justify-center gap-2 text-slate-400 text-xs">
+                    <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
+                    <span>Loading extracted video frames...</span>
+                  </div>
+                ) : candidateDetails?.fingerprints && candidateDetails.fingerprints.length > 0 ? (
+                  <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto p-2 bg-slate-950 rounded border border-slate-800">
+                    {candidateDetails.fingerprints.map((fp, idx) => (
+                      <div key={fp.id || idx} className="bg-slate-900 border border-slate-800 rounded p-1.5 space-y-1">
+                        <div className="relative aspect-video bg-slate-950 rounded overflow-hidden flex items-center justify-center">
+                          {fp.thumbnail_data && isAuthenticDecodedFrame(fp.thumbnail_data) && !failedThumbnails[fp.id || `${idx}`] ? (
+                            <img
+                              src={fp.thumbnail_data}
+                              alt={`Keyframe at ${fp.timestamp_sec}s`}
+                              className="w-full h-full object-cover"
+                              referrerPolicy="no-referrer"
+                              onError={() => setFailedThumbnails(prev => ({ ...prev, [fp.id || `${idx}`]: true }))}
+                            />
+                          ) : (
+                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 text-center p-1">
+                              <AlertCircle className="w-4 h-4 text-amber-400 mb-0.5 shrink-0" />
+                              <span className="text-[8px] font-mono text-amber-300">Frame Unavailable</span>
+                            </div>
+                          )}
+                          <span className="absolute bottom-1 right-1 px-1 bg-black/80 font-mono text-[9px] text-slate-300 rounded">
+                            t = {fp.timestamp_sec.toFixed(1)}s
+                          </span>
+                        </div>
+                        <div className="text-[9px] font-mono text-slate-400 truncate flex items-center justify-between">
+                          <span className="text-cyan-400">#{fp.frame_index ?? idx}</span>
+                          <span className="truncate max-w-[90px]">{fp.phash_hex}</span>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : (
+                  <div className="p-3 bg-slate-950 rounded border border-slate-800 flex items-center gap-2.5 text-xs text-slate-400">
+                    <AlertCircle className="w-4 h-4 text-amber-400 shrink-0" />
+                    <div>
+                      <span className="font-semibold text-slate-300">
+                        {selectedCandidate.pipeline_status === 'DRM_PROTECTED'
+                          ? 'DRM Protection Verified (Widevine / FairPlay)'
+                          : selectedCandidate.pipeline_status === 'BLOCKED'
+                          ? 'Bot Protection Enforced (Cloudflare Turnstile)'
+                          : selectedCandidate.pipeline_status === 'UNREACHABLE'
+                          ? 'Origin Stream Endpoint Unreachable (HTTP 404)'
+                          : 'Keyframe Extraction Pending'}
+                      </span>
+                      <div className="text-[10px] text-slate-500 font-mono mt-0.5">
+                        {selectedCandidate.pipeline_status === 'DRM_PROTECTED'
+                          ? 'Encrypted video feed. Direct frame acquisition restricted without licensing keys.'
+                          : selectedCandidate.pipeline_status === 'BLOCKED'
+                          ? 'Access blocked by target edge security. Frames unavailable.'
+                          : selectedCandidate.pipeline_status === 'UNREACHABLE'
+                          ? 'Candidate media stream missing or offline.'
+                          : 'Awaiting candidate stream chunk ingestion and decoder pass.'}
+                      </div>
+                    </div>
+                  </div>
+                )}
               </div>
 
               {/* Logs */}

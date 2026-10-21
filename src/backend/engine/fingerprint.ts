@@ -130,90 +130,12 @@ export class FingerprintEngine {
    * Generates a high-fidelity visual SVG frame thumbnail for video forensic display.
    * Displays authentic scene graphics, timecode, audio waveforms, watermark, and frame index.
    */
-  public static renderVisualKeyframeThumbnail(options: {
-    title: string;
-    timestampSec: number;
-    frameIndex: number;
-    theme?: 'sports' | 'cinema' | 'general';
-    isCandidate?: boolean;
-    tagLabel?: string;
-  }): string {
-    const { title, timestampSec, frameIndex, theme = 'general', isCandidate = false, tagLabel } = options;
-    const minutes = Math.floor(timestampSec / 60).toString().padStart(2, '0');
-    const seconds = Math.floor(timestampSec % 60).toString().padStart(2, '0');
-    const ms = Math.floor((timestampSec % 1) * 100).toString().padStart(2, '0');
-    const timecode = `00:${minutes}:${seconds}.${ms}`;
-
-    let bgGradStart = '#0f172a';
-    let bgGradEnd = '#020617';
-    let accent = '#38bdf8';
-    let sceneGraphics = '';
-
-    if (theme === 'sports') {
-      bgGradStart = isCandidate ? '#064e3b' : '#042f2e';
-      bgGradEnd = '#022c22';
-      accent = isCandidate ? '#34d399' : '#2dd4bf';
-
-      const ballX = 60 + ((frameIndex * 37) % 200);
-      const ballY = 40 + ((frameIndex * 23) % 100);
-      sceneGraphics = `
-        <ellipse cx="160" cy="90" rx="140" ry="75" fill="none" stroke="${accent}" stroke-width="1.5" opacity="0.3"/>
-        <line x1="160" y1="15" x2="160" y2="165" stroke="${accent}" stroke-width="1.5" opacity="0.4"/>
-        <circle cx="160" cy="90" r="28" fill="none" stroke="${accent}" stroke-width="1.5" opacity="0.5"/>
-        <circle cx="${ballX}" cy="${ballY}" r="6" fill="#f8fafc" stroke="${accent}" stroke-width="1.5"/>
-        <rect x="250" y="20" width="55" height="18" rx="2" fill="#000000" opacity="0.7"/>
-        <text x="277" y="33" fill="#34d399" font-family="monospace" font-size="10" font-weight="bold" text-anchor="middle">LIVE 4K</text>
-      `;
-    } else if (theme === 'cinema') {
-      bgGradStart = isCandidate ? '#1e1b4b' : '#0f172a';
-      bgGradEnd = '#09090b';
-      accent = '#818cf8';
-
-      const horizonY = 70 + ((frameIndex * 7) % 40);
-      sceneGraphics = `
-        <rect x="0" y="0" width="320" height="20" fill="#000000"/>
-        <rect x="0" y="160" width="320" height="20" fill="#000000"/>
-        <line x1="0" y1="${horizonY}" x2="320" y2="${horizonY}" stroke="${accent}" stroke-width="1" opacity="0.5"/>
-        <circle cx="230" cy="${horizonY - 20}" r="18" fill="none" stroke="#f43f5e" stroke-width="2" opacity="0.6"/>
-        <rect x="240" y="28" width="65" height="16" rx="2" fill="#000000" opacity="0.6"/>
-        <text x="272" y="40" fill="#818cf8" font-family="monospace" font-size="9" text-anchor="middle">FEATURE HDR</text>
-      `;
-    } else {
-      const bars = [25, 45, 60, 30, 80, 50, 65, 40, 70, 55, 35, 60, 75, 40];
-      const barSvg = bars.map((b, i) => {
-        const height = Math.max(10, (b + frameIndex * 11) % 70);
-        return `<rect x="${60 + i * 15}" y="${130 - height}" width="8" height="${height}" rx="1" fill="${accent}" opacity="0.4"/>`;
-      }).join('');
-      sceneGraphics = barSvg;
-    }
-
-    const badgeText = tagLabel || (isCandidate ? 'CANDIDATE FEED' : 'REFERENCE MASTER');
-    const badgeColor = isCandidate ? '#f59e0b' : '#06b6d4';
-
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180">
-      <defs>
-        <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
-          <stop offset="0%" stop-color="${bgGradStart}"/>
-          <stop offset="100%" stop-color="${bgGradEnd}"/>
-        </linearGradient>
-      </defs>
-      <rect width="320" height="180" fill="url(#bgGrad)"/>
-      ${sceneGraphics}
-      <rect x="12" y="12" width="115" height="22" rx="3" fill="#020617" opacity="0.85" stroke="#334155" stroke-width="1"/>
-      <text x="20" y="27" fill="#f8fafc" font-family="monospace" font-size="11" font-weight="600">${timecode}</text>
-      <rect x="12" y="146" width="95" height="18" rx="2" fill="${badgeColor}" opacity="0.2" stroke="${badgeColor}" stroke-width="1"/>
-      <text x="59" y="159" fill="${badgeColor}" font-family="monospace" font-size="9" font-weight="bold" text-anchor="middle">${badgeText}</text>
-      <text x="308" y="160" fill="#94a3b8" font-family="monospace" font-size="10" text-anchor="end">Frame #${frameIndex}</text>
-      <text x="160" y="105" fill="#f8fafc" font-family="sans-serif" font-size="12" font-weight="600" text-anchor="middle" opacity="0.9">${title.slice(0, 32)}</text>
-    </svg>`;
-
-    return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
-  }
-
   /**
-   * Pure-JS fallback frame generator: Synthesizes deterministic, valid perceptual
-   * keyframes and 64-bit dHash strings when FFmpeg is not available, fails, or remote video cannot be opened.
-   * Guarantees non-empty output across 5 sample timestamps (e.g., 0s, 5s, 10s, 15s, 20s).
+   * Pure-JS fallback perceptual hash generator:
+   * When FFmpeg is not available, video file is missing, or remote video cannot be opened,
+   * generates 64-bit dHash strings for mathematical pipeline continuity, but strictly
+   * NEVER synthesizes fake SVG/canvas graphics. Frame image data remains undefined
+   * so that the frontend displays an explicit missing/unavailable evidence state.
    */
   public static generateFallbackKeyframes(
     title: string,
@@ -222,33 +144,14 @@ export class FingerprintEngine {
       maxFrames?: number;
       isCandidate?: boolean;
       baseOffsetSec?: number;
-      theme?: 'sports' | 'cinema' | 'general';
       referenceFps?: FrameFingerprint[];
     } = {}
   ): ExtractedFrame[] {
     const isCandidate = Boolean(options.isCandidate);
     const baseOffsetSec = options.baseOffsetSec || (isCandidate ? 15.0 : 0.0);
 
-    // Default to 5 canonical sample timestamps: 0s, 5s, 10s, 15s, 20s (or offset-shifted)
     const sampleTimestamps = [0.0, 5.0, 10.0, 15.0, 20.0].map(t => Number((t + baseOffsetSec).toFixed(1)));
-
-    const isSports = title.toLowerCase().includes('ucl') || 
-                     title.toLowerCase().includes('league') || 
-                     title.toLowerCase().includes('fc') || 
-                     title.toLowerCase().includes('match') ||
-                     title.toLowerCase().includes('arsenal') ||
-                     title.toLowerCase().includes('bayern') ||
-                     title.toLowerCase().includes('derby') ||
-                     title.toLowerCase().includes('sports');
-
-    const theme = options.theme || (isSports ? 'sports' : (title.toLowerCase().includes('film') || title.toLowerCase().includes('apex') ? 'cinema' : 'general'));
-
     const frames: ExtractedFrame[] = [];
-    const thumbnailsDir = path.resolve(process.cwd(), 'data', 'thumbnails');
-    if (!fs.existsSync(thumbnailsDir)) {
-      fs.mkdirSync(thumbnailsDir, { recursive: true });
-    }
-
     const seedHash = crypto.createHash('sha256').update(title).digest();
 
     for (let i = 0; i < sampleTimestamps.length; i++) {
@@ -278,30 +181,15 @@ export class FingerprintEngine {
         avgLuminance = computed.avg_luminance;
       }
 
-      const thumbnailData = this.renderVisualKeyframeThumbnail({
-        title,
-        timestampSec,
-        frameIndex: i,
-        theme,
-        isCandidate,
-        tagLabel: isCandidate ? 'CANDIDATE FEED' : 'REF MASTER'
-      });
-
-      // Save SVG thumbnail to disk
-      const safeId = crypto.createHash('md5').update(`${title}_${timestampSec}`).digest('hex').substring(0, 8);
-      const thumbFile = path.join(thumbnailsDir, `thumb_${safeId}_${i}.svg`);
-      try {
-        const svgBody = Buffer.from(thumbnailData.replace(/^data:image\/svg\+xml;base64,/, ''), 'base64');
-        fs.writeFileSync(thumbFile, svgBody);
-      } catch {}
-
+      // Explicitly leave thumbnail_data and thumbnail_path undefined
+      // Never substitute synthetic graphics, fake pitch illustrations, or placeholders
       frames.push({
         timestamp_sec: timestampSec,
         frame_index: i,
         phash_hex: phashHex,
         avg_luminance: avgLuminance,
-        thumbnail_data: thumbnailData,
-        thumbnail_path: thumbFile
+        thumbnail_data: undefined,
+        thumbnail_path: undefined
       });
     }
 
@@ -385,8 +273,9 @@ export class FingerprintEngine {
 
     const hasFfmpeg = await this.checkFfmpegAvailability();
     const isLocalFile = fs.existsSync(videoPathOrUrl);
+    const isHttpUrl = videoPathOrUrl.startsWith('http://') || videoPathOrUrl.startsWith('https://');
 
-    if (hasFfmpeg && isLocalFile) {
+    if (hasFfmpeg && (isLocalFile || isHttpUrl)) {
       const tempDir = path.join(process.cwd(), 'data', 'temp', `extract_${Date.now()}_${Math.random().toString(36).substring(7)}`);
       try {
         fs.mkdirSync(tempDir, { recursive: true });

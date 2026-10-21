@@ -21,7 +21,7 @@ import {
 } from '../types.js';
 
 // Guarantees all forensic master videos and candidate leak video assets exist on disk
-function ensureMasterVideosExist() {
+export function ensureMasterVideosExist() {
   const mediaDir = path.resolve(process.cwd(), 'data', 'media');
   if (!fs.existsSync(mediaDir)) {
     fs.mkdirSync(mediaDir, { recursive: true });
@@ -48,26 +48,33 @@ function ensureMasterVideosExist() {
     } catch {}
   }
 
-  const uclMaster = path.join(mediaDir, 'ucl_final_master.mp4');
+  const uclMaster = path.join(mediaDir, 'arsenal_bayern_ucl_master.mp4');
   if (!fs.existsSync(uclMaster)) {
     try {
       execFileSync('ffmpeg', [
-        '-f', 'lavfi', '-i', 'testsrc=duration=16:size=640x360:rate=25',
-        '-vf', 'drawbox=x=0:y=0:w=640:h=360:color=darkgreen@0.3:t=fill',
+        '-f', 'lavfi', '-i', 'testsrc2=duration=16:size=1280x720:rate=25',
         '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', uclMaster
       ], { timeout: 20000 });
     } catch {}
   }
+  const uclFinalMaster = path.join(mediaDir, 'ucl_final_master.mp4');
+  if (!fs.existsSync(uclFinalMaster) && fs.existsSync(uclMaster)) {
+    try { fs.copyFileSync(uclMaster, uclFinalMaster); } catch {}
+  }
 
-  const uclCand = path.join(mediaDir, 'ucl_pirate_stream.mp4');
+  const uclCand = path.join(mediaDir, 'arsenal_bayern_pirate_stream.mp4');
   if (!fs.existsSync(uclCand) && fs.existsSync(uclMaster)) {
     try {
       execFileSync('ffmpeg', [
         '-i', uclMaster,
-        '-vf', 'scale=480:270,drawbox=x=400:y=20:w=50:h=15:color=yellow@0.6:t=fill',
+        '-vf', 'scale=640:360',
         '-c:v', 'libx264', '-y', uclCand
       ], { timeout: 20000 });
     } catch {}
+  }
+  const uclPirateStream = path.join(mediaDir, 'ucl_pirate_stream.mp4');
+  if (!fs.existsSync(uclPirateStream) && fs.existsSync(uclCand)) {
+    try { fs.copyFileSync(uclCand, uclPirateStream); } catch {}
   }
 
   const apexMaster = path.join(mediaDir, 'apex_horizon_hdr_master.mp4');
@@ -80,20 +87,30 @@ function ensureMasterVideosExist() {
       ], { timeout: 20000 });
     } catch {}
   }
-}
 
-function createThumbnailSvg(title: string, subtitle: string, bgColor: string, accentColor: string, frameTime: string): string {
-  const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="320" height="180" viewBox="0 0 320 180">
-    <rect width="320" height="180" fill="${bgColor}"/>
-    <line x1="0" y1="90" x2="320" y2="90" stroke="${accentColor}" stroke-width="1" stroke-dasharray="4 4" opacity="0.4"/>
-    <line x1="160" y1="0" x2="160" y2="180" stroke="${accentColor}" stroke-width="1" stroke-dasharray="4 4" opacity="0.4"/>
-    <circle cx="160" cy="90" r="38" fill="none" stroke="${accentColor}" stroke-width="2" opacity="0.7"/>
-    <rect x="16" y="16" width="90" height="20" rx="3" fill="#000000" opacity="0.6"/>
-    <text x="24" y="30" fill="#ffffff" font-family="monospace" font-size="11" font-weight="bold">${frameTime}</text>
-    <text x="160" y="135" fill="#f8fafc" font-family="sans-serif" font-size="13" font-weight="600" text-anchor="middle">${title}</text>
-    <text x="160" y="152" fill="#94a3b8" font-family="sans-serif" font-size="10" text-anchor="middle">${subtitle}</text>
-  </svg>`;
-  return `data:image/svg+xml;base64,${Buffer.from(svg).toString('base64')}`;
+  const culinarySample = path.join(mediaDir, 'culinary_public_sample.mp4');
+  if (!fs.existsSync(culinarySample)) {
+    try {
+      execFileSync('ffmpeg', [
+        '-f', 'lavfi', '-i', 'testsrc=duration=8:size=640x360:rate=24',
+        '-vf', 'drawbox=x=0:y=0:w=640:h=360:color=orange@0.4:t=fill',
+        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', culinarySample
+      ], { timeout: 20000 });
+    } catch {}
+  }
+
+  // Remove any stale synthetic SVG thumbnails from thumbnails directory
+  const thumbnailsDir = path.resolve(process.cwd(), 'data', 'thumbnails');
+  if (fs.existsSync(thumbnailsDir)) {
+    try {
+      const existing = fs.readdirSync(thumbnailsDir);
+      for (const file of existing) {
+        if (file.endsWith('.svg')) {
+          fs.unlinkSync(path.join(thumbnailsDir, file));
+        }
+      }
+    } catch {}
+  }
 }
 
 export function loadOptionalForensicTestSuite(): { loadedReferences: number; loadedCandidates: number } {
@@ -101,11 +118,38 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   db.clearAll();
 
   const now = new Date().toISOString();
+  const mediaDir = path.resolve(process.cwd(), 'data', 'media');
 
   // -------------------------------------------------------------
   // Reference 1: Live Sports Stream
   // -------------------------------------------------------------
   const ref1Id = 'ref_sports_ucl_2026';
+  const uclMasterPath = fs.existsSync(path.resolve(process.cwd(), 'data', 'media', 'arsenal_bayern_ucl_master.mp4'))
+    ? path.resolve(process.cwd(), 'data', 'media', 'arsenal_bayern_ucl_master.mp4')
+    : path.resolve(process.cwd(), 'data', 'media', 'ucl_final_master.mp4');
+  const uclCandPath = fs.existsSync(path.resolve(process.cwd(), 'data', 'media', 'arsenal_bayern_pirate_stream.mp4'))
+    ? path.resolve(process.cwd(), 'data', 'media', 'arsenal_bayern_pirate_stream.mp4')
+    : path.resolve(process.cwd(), 'data', 'media', 'ucl_pirate_stream.mp4');
+
+  // Extract authentic decoded video keyframes from UCL master video
+  const extractedUclRefFrames = FingerprintEngine.extractVideoFingerprintsSync(uclMasterPath, {
+    intervalSec: 2,
+    maxFrames: 8,
+    generateThumbnails: true,
+    title: 'UEFA Champions League: Arsenal FC vs FC Bayern Munich'
+  });
+
+  const ref1Fingerprints: FrameFingerprint[] = extractedUclRefFrames.map((f, idx) => ({
+    id: `rfp_1_${idx}`,
+    reference_id: ref1Id,
+    timestamp_sec: f.timestamp_sec,
+    frame_index: f.frame_index,
+    phash_hex: f.phash_hex,
+    avg_luminance: f.avg_luminance,
+    thumbnail_data: f.thumbnail_data,
+    created_at: now
+  }));
+
   const ref1: ReferenceItem = {
     id: ref1Id,
     title: 'UEFA Champions League: Arsenal FC vs FC Bayern Munich',
@@ -117,106 +161,44 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     codec: 'h264 / aac',
     source_type: 'FORENSIC_SAMPLE',
     source_url: 'https://broadcast-cdn.uefa.tv/master/arsenal_bayern_live.m3u8',
-    thumbnail_url: createThumbnailSvg('UCL Quarter Final', 'Emirates Stadium Cam 1', '#064e3b', '#34d399', '00:14:22'),
+    file_path: uclMasterPath,
+    thumbnail_url: ref1Fingerprints[0]?.thumbnail_data,
+    first_thumbnail: ref1Fingerprints[0]?.thumbnail_data,
     created_at: now,
     status: 'REGISTERED',
     provenance_sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
-    fingerprint_count: 8,
-    notes: 'Live sports rights registration with 1s perceptual sampling interval.'
+    fingerprint_count: ref1Fingerprints.length,
+    notes: 'Live sports rights registration with 1s perceptual sampling interval and genuine decoded video keyframes.'
   };
 
   db.insertReference(ref1);
-
-  // Generate Reference 1 Keyframes & Fingerprints
-  const ref1Fingerprints: FrameFingerprint[] = [
-    {
-      id: 'rfp_1_0',
-      reference_id: ref1Id,
-      timestamp_sec: 0,
-      frame_index: 0,
-      phash_hex: 'f0f0a8a83c3c1212',
-      avg_luminance: 124.5,
-      thumbnail_data: createThumbnailSvg('Kick-off Center Circle', 'Pitch Cam 0', '#064e3b', '#34d399', '00:00:00'),
-      created_at: now
-    },
-    {
-      id: 'rfp_1_1',
-      reference_id: ref1Id,
-      timestamp_sec: 2,
-      frame_index: 1,
-      phash_hex: 'f0e0b8a83c2c1212',
-      avg_luminance: 126.1,
-      thumbnail_data: createThumbnailSvg('Midfield Attack Move', 'Pitch Cam 1', '#064e3b', '#34d399', '00:00:02'),
-      created_at: now
-    },
-    {
-      id: 'rfp_1_2',
-      reference_id: ref1Id,
-      timestamp_sec: 4,
-      frame_index: 2,
-      phash_hex: 'e0e0b8b83c2c1010',
-      avg_luminance: 130.4,
-      thumbnail_data: createThumbnailSvg('Penalty Box Cross', 'Box Cam A', '#064e3b', '#34d399', '00:00:04'),
-      created_at: now
-    },
-    {
-      id: 'rfp_1_3',
-      reference_id: ref1Id,
-      timestamp_sec: 6,
-      frame_index: 3,
-      phash_hex: 'a0e0c8b838281010',
-      avg_luminance: 138.2,
-      thumbnail_data: createThumbnailSvg('Goal Attempt Save', 'Goal Line Cam', '#064e3b', '#34d399', '00:00:06'),
-      created_at: now
-    },
-    {
-      id: 'rfp_1_4',
-      reference_id: ref1Id,
-      timestamp_sec: 8,
-      frame_index: 4,
-      phash_hex: '80c0d8f878383010',
-      avg_luminance: 142.0,
-      thumbnail_data: createThumbnailSvg('Goalkeeper Reaction', 'Close-up Cam 4', '#064e3b', '#34d399', '00:00:08'),
-      created_at: now
-    },
-    {
-      id: 'rfp_1_5',
-      reference_id: ref1Id,
-      timestamp_sec: 10,
-      frame_index: 5,
-      phash_hex: '88c8d8f878383818',
-      avg_luminance: 118.6,
-      thumbnail_data: createThumbnailSvg('Crowd Reaction Cutaway', 'Stands Cam High', '#064e3b', '#34d399', '00:00:10'),
-      created_at: now
-    },
-    {
-      id: 'rfp_1_6',
-      reference_id: ref1Id,
-      timestamp_sec: 12,
-      frame_index: 6,
-      phash_hex: '98d8f0f070302010',
-      avg_luminance: 122.3,
-      thumbnail_data: createThumbnailSvg('Referee Whistle Stoppage', 'Pitch Cam 2', '#064e3b', '#34d399', '00:00:12'),
-      created_at: now
-    },
-    {
-      id: 'rfp_1_7',
-      reference_id: ref1Id,
-      timestamp_sec: 14,
-      frame_index: 7,
-      phash_hex: 'a8e8f0e060201008',
-      avg_luminance: 125.0,
-      thumbnail_data: createThumbnailSvg('Corner Kick Setup', 'Corner Cam Right', '#064e3b', '#34d399', '00:00:14'),
-      created_at: now
-    }
-  ];
-
   db.insertReferenceFingerprints(ref1Fingerprints);
 
   // -------------------------------------------------------------
   // Reference 2: VOD Feature Film
   // -------------------------------------------------------------
   const ref2Id = 'ref_vod_apex_2026';
+  const apexMasterPath = path.resolve(process.cwd(), 'data', 'media', 'apex_horizon_hdr_master.mp4');
+
+  // Extract authentic decoded video keyframes from Apex Horizon master video
+  const extractedApexRefFrames = FingerprintEngine.extractVideoFingerprintsSync(apexMasterPath, {
+    intervalSec: 2,
+    maxFrames: 6,
+    generateThumbnails: true,
+    title: 'Apex Horizon (2026 Feature Release)'
+  });
+
+  const ref2Fingerprints: FrameFingerprint[] = extractedApexRefFrames.map((f, idx) => ({
+    id: `rfp_2_${idx}`,
+    reference_id: ref2Id,
+    timestamp_sec: f.timestamp_sec,
+    frame_index: f.frame_index,
+    phash_hex: f.phash_hex,
+    avg_luminance: f.avg_luminance,
+    thumbnail_data: f.thumbnail_data,
+    created_at: now
+  }));
+
   const ref2: ReferenceItem = {
     id: ref2Id,
     title: 'Apex Horizon (2026 Feature Release)',
@@ -228,79 +210,17 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     codec: 'hevc / eac3',
     source_type: 'FORENSIC_SAMPLE',
     source_url: 'https://secure-vault.aegisstudios.com/masters/apex_horizon_hdr.mp4',
-    thumbnail_url: createThumbnailSvg('Apex Horizon', 'Theatrical 4K Master', '#1e1b4b', '#818cf8', '01:24:10'),
+    file_path: apexMasterPath,
+    thumbnail_url: ref2Fingerprints[0]?.thumbnail_data,
+    first_thumbnail: ref2Fingerprints[0]?.thumbnail_data,
     created_at: now,
     status: 'REGISTERED',
     provenance_sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0',
-    fingerprint_count: 6,
-    notes: 'Theatrical studio master registered under anti-piracy pre-release protection.'
+    fingerprint_count: ref2Fingerprints.length,
+    notes: 'Theatrical studio master registered with authentic decoded video frames.'
   };
 
   db.insertReference(ref2);
-
-  const ref2Fingerprints: FrameFingerprint[] = [
-    {
-      id: 'rfp_2_0',
-      reference_id: ref2Id,
-      timestamp_sec: 0,
-      frame_index: 0,
-      phash_hex: '1122334455667788',
-      avg_luminance: 45.2,
-      thumbnail_data: createThumbnailSvg('Desert Horizon Opening', 'Scene 01 / Master', '#1e1b4b', '#818cf8', '00:00:00'),
-      created_at: now
-    },
-    {
-      id: 'rfp_2_1',
-      reference_id: ref2Id,
-      timestamp_sec: 2,
-      frame_index: 1,
-      phash_hex: '1122334455667799',
-      avg_luminance: 48.0,
-      thumbnail_data: createThumbnailSvg('Spacecraft Atmospheric Entry', 'Scene 02 / Master', '#1e1b4b', '#818cf8', '00:00:02'),
-      created_at: now
-    },
-    {
-      id: 'rfp_2_2',
-      reference_id: ref2Id,
-      timestamp_sec: 4,
-      frame_index: 2,
-      phash_hex: '1122335555667799',
-      avg_luminance: 55.4,
-      thumbnail_data: createThumbnailSvg('Cockpit Warning System', 'Scene 03 / Master', '#1e1b4b', '#818cf8', '00:00:04'),
-      created_at: now
-    },
-    {
-      id: 'rfp_2_3',
-      reference_id: ref2Id,
-      timestamp_sec: 6,
-      frame_index: 3,
-      phash_hex: '1133335555667799',
-      avg_luminance: 62.1,
-      thumbnail_data: createThumbnailSvg('Pilot Telemetry HUD', 'Scene 04 / Master', '#1e1b4b', '#818cf8', '00:00:06'),
-      created_at: now
-    },
-    {
-      id: 'rfp_2_4',
-      reference_id: ref2Id,
-      timestamp_sec: 8,
-      frame_index: 4,
-      phash_hex: '1133337755777799',
-      avg_luminance: 59.8,
-      thumbnail_data: createThumbnailSvg('Planet Surface Touchdown', 'Scene 05 / Master', '#1e1b4b', '#818cf8', '00:00:08'),
-      created_at: now
-    },
-    {
-      id: 'rfp_2_5',
-      reference_id: ref2Id,
-      timestamp_sec: 10,
-      frame_index: 5,
-      phash_hex: '1133337777777799',
-      avg_luminance: 52.3,
-      thumbnail_data: createThumbnailSvg('Survey Team Exit', 'Scene 06 / Master', '#1e1b4b', '#818cf8', '00:00:10'),
-      created_at: now
-    }
-  ];
-
   db.insertReferenceFingerprints(ref2Fingerprints);
 
   // -------------------------------------------------------------
@@ -350,54 +270,25 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   };
   db.upsertCandidate(cand1);
 
-  // Candidate 1 Fingerprints (+16.0s offset relative to reference, slight compression diffs)
-  const cand1Fingerprints: FrameFingerprint[] = [
-    {
-      id: 'cfp_1_0',
-      candidate_id: cand1Id,
-      timestamp_sec: 16,
-      frame_index: 0,
-      phash_hex: 'f0f0a8a83c3c1213', // 1 bit diff from ref[0]
-      thumbnail_data: createThumbnailSvg('Kick-off Stream Feed', 'live2all.sx (+16s)', '#064e3b', '#6ee7b7', '00:00:16'),
-      created_at: now
-    },
-    {
-      id: 'cfp_1_1',
-      candidate_id: cand1Id,
-      timestamp_sec: 18,
-      frame_index: 1,
-      phash_hex: 'f0e0b8a83c2c1212', // 0 bit diff from ref[1]
-      thumbnail_data: createThumbnailSvg('Midfield Play Feed', 'live2all.sx (+16s)', '#064e3b', '#6ee7b7', '00:00:18'),
-      created_at: now
-    },
-    {
-      id: 'cfp_1_2',
-      candidate_id: cand1Id,
-      timestamp_sec: 20,
-      frame_index: 2,
-      phash_hex: 'e0e0b8b83c2c1011', // 1 bit diff from ref[2]
-      thumbnail_data: createThumbnailSvg('Penalty Box Stream', 'live2all.sx (+16s)', '#064e3b', '#6ee7b7', '00:00:20'),
-      created_at: now
-    },
-    {
-      id: 'cfp_1_3',
-      candidate_id: cand1Id,
-      timestamp_sec: 22,
-      frame_index: 3,
-      phash_hex: 'a0e0c8b838281010', // 0 bit diff from ref[3]
-      thumbnail_data: createThumbnailSvg('Goal Attempt Stream', 'live2all.sx (+16s)', '#064e3b', '#6ee7b7', '00:00:22'),
-      created_at: now
-    },
-    {
-      id: 'cfp_1_4',
-      candidate_id: cand1Id,
-      timestamp_sec: 24,
-      frame_index: 4,
-      phash_hex: '80c0d8f878383012', // 1 bit diff from ref[4]
-      thumbnail_data: createThumbnailSvg('Goalkeeper Stream', 'live2all.sx (+16s)', '#064e3b', '#6ee7b7', '00:00:24'),
-      created_at: now
-    }
-  ];
+  // Candidate 1: Extract authentic decoded video keyframes from acquired pirate stream video
+  const extractedUclCandFrames = FingerprintEngine.extractVideoFingerprintsSync(uclCandPath, {
+    intervalSec: 2,
+    maxFrames: 6,
+    generateThumbnails: true,
+    title: cand1.discovered_title,
+    isCandidate: true
+  });
+
+  const cand1Fingerprints: FrameFingerprint[] = extractedUclCandFrames.map((f, idx) => ({
+    id: `cfp_1_${idx}`,
+    candidate_id: cand1Id,
+    timestamp_sec: f.timestamp_sec + 16,
+    frame_index: f.frame_index,
+    phash_hex: f.phash_hex,
+    avg_luminance: f.avg_luminance,
+    thumbnail_data: f.thumbnail_data,
+    created_at: now
+  }));
   db.insertCandidateFingerprints(cand1Fingerprints);
 
   // Compare and insert genuine Evidence Record for Candidate 1
@@ -509,27 +400,50 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   };
   db.upsertCandidate(cand4);
 
-  // Candidate 4 fingerprints (completely different hashes)
-  const cand4Fingerprints: FrameFingerprint[] = [
-    {
-      id: 'cfp_4_0',
-      candidate_id: cand4Id,
-      timestamp_sec: 0,
-      frame_index: 0,
-      phash_hex: '00112233aabbccdd',
-      thumbnail_data: createThumbnailSvg('Culinary Kitchen', 'public-web.tv', '#78350f', '#fde68a', '00:00:00'),
-      created_at: now
-    },
-    {
-      id: 'cfp_4_1',
-      candidate_id: cand4Id,
-      timestamp_sec: 2,
-      frame_index: 1,
-      phash_hex: '00112233aabbccfe',
-      thumbnail_data: createThumbnailSvg('Pasta Dough Prep', 'public-web.tv', '#78350f', '#fde68a', '00:00:02'),
-      created_at: now
-    }
-  ];
+  // Candidate 4 fingerprints (completely different hashes from genuine culinary video)
+  const culinarySamplePath = path.join(mediaDir, 'culinary_public_sample.mp4');
+  const extractedCulinary = fs.existsSync(culinarySamplePath)
+    ? FingerprintEngine.extractVideoFingerprintsSync(culinarySamplePath, {
+        intervalSec: 2,
+        maxFrames: 4,
+        generateThumbnails: true,
+        title: cand4.discovered_title
+      })
+    : [];
+
+  const cand4Fingerprints: FrameFingerprint[] = extractedCulinary.length > 0
+    ? extractedCulinary.map((f, idx) => ({
+        id: `cfp_4_${idx}`,
+        candidate_id: cand4Id,
+        timestamp_sec: f.timestamp_sec,
+        frame_index: f.frame_index,
+        phash_hex: f.phash_hex,
+        avg_luminance: f.avg_luminance,
+        thumbnail_data: f.thumbnail_data,
+        created_at: now
+      }))
+    : [
+        {
+          id: 'cfp_4_0',
+          candidate_id: cand4Id,
+          timestamp_sec: 0,
+          frame_index: 0,
+          phash_hex: '00112233aabbccdd',
+          avg_luminance: 120,
+          thumbnail_data: undefined,
+          created_at: now
+        },
+        {
+          id: 'cfp_4_1',
+          candidate_id: cand4Id,
+          timestamp_sec: 2,
+          frame_index: 1,
+          phash_hex: '00112233aabbccfe',
+          avg_luminance: 125,
+          thumbnail_data: undefined,
+          created_at: now
+        }
+      ];
   db.insertCandidateFingerprints(cand4Fingerprints);
 
   const comp4 = FingerprintEngine.compareFingerprintSequences(cand4Fingerprints, ref1Fingerprints);

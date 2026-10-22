@@ -198,9 +198,47 @@ export class FingerprintEngine {
   }
 
   /**
+   * Resolves a video file path, web route (/media/..., /uploads/...), or known master stream URL
+   * to a local filesystem path when available, or returns the original URL for FFmpeg probing.
+   */
+  public static resolveMediaSourcePath(videoPathOrUrl: string): string {
+    if (!videoPathOrUrl) return '';
+    const trimmed = videoPathOrUrl.trim();
+    if (fs.existsSync(trimmed)) {
+      return path.resolve(trimmed);
+    }
+
+    const mediaDir = path.resolve(process.cwd(), 'data', 'media');
+    const uploadsDir = path.resolve(process.cwd(), 'uploads');
+
+    // Check web-relative routes (/media/..., /data/media/..., /uploads/...)
+    const stripped = trimmed.replace(/^https?:\/\/[^/]+/i, '');
+    if (stripped.startsWith('/media/') || stripped.startsWith('/data/media/')) {
+      const candidateFile = path.join(mediaDir, path.basename(stripped));
+      if (fs.existsSync(candidateFile)) return candidateFile;
+    }
+    if (stripped.startsWith('/uploads/')) {
+      const candidateFile = path.join(uploadsDir, path.basename(stripped));
+      if (fs.existsSync(candidateFile)) return candidateFile;
+    }
+
+    // Check if basename directly exists in data/media or uploads
+    const base = path.basename(stripped.split('?')[0]);
+    if (base) {
+      const inMedia = path.join(mediaDir, base);
+      if (fs.existsSync(inMedia)) return inMedia;
+      const inUploads = path.join(uploadsDir, base);
+      if (fs.existsSync(inUploads)) return inUploads;
+    }
+
+    return trimmed;
+  }
+
+  /**
    * Probe video file or accessible stream using ffprobe / ffmpeg
    */
   public static async probeVideo(videoPathOrUrl: string): Promise<ProbeResult> {
+    const resolvedInput = this.resolveMediaSourcePath(videoPathOrUrl);
     const hasFfmpeg = await this.checkFfmpegAvailability();
     if (hasFfmpeg) {
       try {
@@ -208,8 +246,9 @@ export class FingerprintEngine {
           '-v', 'error',
           '-select_streams', 'v:0',
           '-show_entries', 'stream=width,height,r_frame_rate,duration,codec_name',
+          '-show_entries', 'format=duration',
           '-of', 'json',
-          videoPathOrUrl
+          resolvedInput
         ], { timeout: 10000 });
 
         const parsed = JSON.parse(stdout);
@@ -221,7 +260,7 @@ export class FingerprintEngine {
           if (num && den) fps = Number((num / den).toFixed(2));
         }
 
-        let duration = parseFloat(stream.duration || '0');
+        let duration = parseFloat(stream.duration || parsed.format?.duration || '0');
         if (isNaN(duration) || duration <= 0) {
           duration = 120;
         }
@@ -247,9 +286,11 @@ export class FingerprintEngine {
   }
 
   /**
-   * Extracts frames from video file using FFmpeg, calculates dHash for each frame,
-   * stores keyframe thumbnails into ./data/thumbnails/, and falls back to pure-JS
-   * synthetic keyframe generation if FFmpeg is unavailable, fails, or errors out.
+   * Extracts frames from video source using FFmpeg, persists decoded JPEG frames
+   * into ./data/thumbnails/, and computes the 64-bit dHash directly from each
+   * decoded frame so timestamps, persisted JPEGs, and hashes strictly correspond.
+   *
+   * Reference frame extraction (!options.isCandidate) never uses synthetic fallback frames.
    */
   public static async extractVideoFingerprints(
     videoPathOrUrl: string,
@@ -263,8 +304,9 @@ export class FingerprintEngine {
       referenceFps?: FrameFingerprint[];
     } = {}
   ): Promise<ExtractedFrame[]> {
-    const intervalSec = options.intervalSec || 2;
-    const maxFrames = options.maxFrames || 30;
+    const intervalSec = options.intervalSec && options.intervalSec > 0 ? options.intervalSec : 2;
+    const maxFrames = options.maxFrames && options.maxFrames > 0 ? options.maxFrames : 30;
+    const isCandidate = Boolean(options.isCandidate);
     const frames: ExtractedFrame[] = [];
 
     const thumbnailsDir = path.resolve(process.cwd(), 'data', 'thumbnails');
@@ -272,88 +314,101 @@ export class FingerprintEngine {
       fs.mkdirSync(thumbnailsDir, { recursive: true });
     }
 
+    const resolvedInput = this.resolveMediaSourcePath(videoPathOrUrl);
     const hasFfmpeg = await this.checkFfmpegAvailability();
-    const isLocalFile = fs.existsSync(videoPathOrUrl);
-    const isHttpUrl = videoPathOrUrl.startsWith('http://') || videoPathOrUrl.startsWith('https://');
+    const isLocalFile = fs.existsSync(resolvedInput);
+    const isHttpUrl = resolvedInput.startsWith('http://') || resolvedInput.startsWith('https://');
+
+    if (!hasFfmpeg) {
+      if (!isCandidate) {
+        throw new Error('FFmpeg is required for reference frame extraction but is not available on the host.');
+      }
+    }
+
+    if (!isLocalFile && !isHttpUrl && !isCandidate) {
+      throw new Error(`Reference video source not found or inaccessible: ${videoPathOrUrl}`);
+    }
+
+    const extractionId = `${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+    const tempDir = path.join(process.cwd(), 'data', 'temp', `extract_${extractionId}`);
 
     if (hasFfmpeg && (isLocalFile || isHttpUrl)) {
-      const tempDir = path.join(process.cwd(), 'data', 'temp', `extract_${Date.now()}_${Math.random().toString(36).substring(7)}`);
       try {
         fs.mkdirSync(tempDir, { recursive: true });
 
-        const rawOutputPath = path.join(tempDir, 'frames_9x8.raw');
+        // Step 1: Decode frames from the video source at calibrated interval directly into JPEG files
+        const thumbPattern = path.join(tempDir, 'thumb_%04d.jpg');
         await execFileAsync('ffmpeg', [
           '-y',
+          '-v', 'error',
           '-t', '120',
-          '-i', videoPathOrUrl,
-          '-vf', `fps=1/${intervalSec},scale=9:8,format=gray`,
-          '-vframes', `${maxFrames}`,
-          '-f', 'rawvideo',
-          rawOutputPath
+          '-i', resolvedInput,
+          '-vf', `fps=1/${intervalSec},scale=320:180`,
+          '-frames:v', `${maxFrames}`,
+          '-q:v', '3',
+          thumbPattern
         ], { timeout: 25000 });
 
-        let thumbFiles: string[] = [];
-        if (options.generateThumbnails !== false) {
-          const thumbPattern = path.join(tempDir, 'thumb_%04d.jpg');
-          try {
-            await execFileAsync('ffmpeg', [
-              '-y',
-              '-t', '120',
-              '-i', videoPathOrUrl,
-              '-vf', `fps=1/${intervalSec},scale=160:90`,
-              '-vframes', `${maxFrames}`,
-              '-q:v', '5',
-              thumbPattern
-            ], { timeout: 25000 });
+        const thumbFiles = fs.readdirSync(tempDir)
+          .filter(f => f.startsWith('thumb_') && f.endsWith('.jpg'))
+          .sort();
 
-            thumbFiles = fs.readdirSync(tempDir)
-              .filter(f => f.startsWith('thumb_') && f.endsWith('.jpg'))
-              .sort();
-          } catch {}
-        }
+        if (thumbFiles.length > 0) {
+          // Step 2: Decode the exact extracted JPEG frames into 9x8 grayscale raw buffers (72 bytes/frame)
+          const rawOutputPath = path.join(tempDir, 'frames_9x8.raw');
+          await execFileAsync('ffmpeg', [
+            '-y',
+            '-v', 'error',
+            '-framerate', '1',
+            '-i', thumbPattern,
+            '-vf', 'scale=9:8,format=gray',
+            '-f', 'rawvideo',
+            rawOutputPath
+          ], { timeout: 25000 });
 
-        if (fs.existsSync(rawOutputPath)) {
-          const rawBuffer = fs.readFileSync(rawOutputPath);
-          const frameChunkSize = 72;
-          const totalFrames = Math.floor(rawBuffer.length / frameChunkSize);
+          if (fs.existsSync(rawOutputPath)) {
+            const rawBuffer = fs.readFileSync(rawOutputPath);
+            const frameChunkSize = 72;
+            const totalFrames = Math.min(thumbFiles.length, Math.floor(rawBuffer.length / frameChunkSize));
 
-          for (let i = 0; i < totalFrames; i++) {
-            const chunk = rawBuffer.subarray(i * frameChunkSize, (i + 1) * frameChunkSize);
-            const { phash_hex, avg_luminance } = this.computeDHashFromGrayscale9x8(chunk);
-            
-            let thumbnail_data: string | undefined;
-            let thumbnail_path: string | undefined;
-            let thumbnail_url: string | undefined;
-
-            if (thumbFiles[i]) {
+            for (let i = 0; i < totalFrames; i++) {
               const srcThumb = path.join(tempDir, thumbFiles[i]);
-              if (fs.existsSync(srcThumb)) {
-                const b64 = fs.readFileSync(srcThumb).toString('base64');
-                thumbnail_data = `data:image/jpeg;base64,${b64}`;
+              if (!fs.existsSync(srcThumb)) continue;
 
-                const filename = `thumb_${Date.now()}_${i}.jpg`;
-                const targetThumb = path.join(thumbnailsDir, filename);
-                try {
-                  fs.copyFileSync(srcThumb, targetThumb);
-                  thumbnail_path = `/thumbnails/${filename}`;
-                  thumbnail_url = `/thumbnails/${filename}`;
-                } catch {}
+              const jpegBuffer = fs.readFileSync(srcThumb);
+              // Verify valid JPEG SOI header (0xFF 0xD8)
+              if (jpegBuffer.length < 4 || jpegBuffer[0] !== 0xff || jpegBuffer[1] !== 0xd8) {
+                continue;
               }
-            }
 
-            frames.push({
-              timestamp_sec: i * intervalSec,
-              frame_index: i,
-              phash_hex,
-              avg_luminance,
-              thumbnail_data,
-              thumbnail_path,
-              thumbnail_url
-            });
+              const chunk = rawBuffer.subarray(i * frameChunkSize, (i + 1) * frameChunkSize);
+              const { phash_hex, avg_luminance } = this.computeDHashFromGrayscale9x8(chunk);
+
+              const filename = `thumb_${extractionId}_${i}.jpg`;
+              const targetThumb = path.join(thumbnailsDir, filename);
+              fs.copyFileSync(srcThumb, targetThumb);
+
+              const webRoute = `/thumbnails/${filename}`;
+              const b64 = jpegBuffer.toString('base64');
+              const thumbnail_data = `data:image/jpeg;base64,${b64}`;
+
+              frames.push({
+                timestamp_sec: Number((i * intervalSec).toFixed(2)),
+                frame_index: i,
+                phash_hex,
+                avg_luminance,
+                thumbnail_data,
+                thumbnail_path: webRoute,
+                thumbnail_url: webRoute
+              });
+            }
           }
         }
       } catch (err: any) {
-        console.warn(`[FFmpeg Engine] Extraction notice: ${err.message}. Engaging pure-JS visual fallback.`);
+        if (!isCandidate) {
+          throw new Error(`Reference video frame extraction failed for "${videoPathOrUrl}": ${err.message}`);
+        }
+        console.warn(`[FFmpeg Engine] Candidate extraction notice: ${err.message}.`);
       } finally {
         try {
           fs.rmSync(tempDir, { recursive: true, force: true });
@@ -361,8 +416,10 @@ export class FingerprintEngine {
       }
     }
 
-    // PURE-JS FALLBACK GUARANTEE: Never return 0 frames!
     if (frames.length === 0) {
+      if (!isCandidate) {
+        throw new Error(`No real video frames could be decoded by FFmpeg from reference source: ${videoPathOrUrl}`);
+      }
       const derivedTitle = options.title || path.basename(videoPathOrUrl) || 'Media Stream';
       return this.generateFallbackKeyframes(derivedTitle, {
         intervalSec,
@@ -378,7 +435,8 @@ export class FingerprintEngine {
 
   /**
    * Synchronous video frame extraction using FFmpeg execFileSync.
-   * Extracts authentic keyframes directly from video files on disk.
+   * Decodes real video frames to persisted JPEGs and computes 64-bit dHash directly
+   * from each decoded frame. Never uses synthetic fallback frames for reference items.
    */
   public static extractVideoFingerprintsSync(
     videoPathOrUrl: string,
@@ -392,8 +450,9 @@ export class FingerprintEngine {
       referenceFps?: FrameFingerprint[];
     } = {}
   ): ExtractedFrame[] {
-    const intervalSec = options.intervalSec || 2;
-    const maxFrames = options.maxFrames || 30;
+    const intervalSec = options.intervalSec && options.intervalSec > 0 ? options.intervalSec : 2;
+    const maxFrames = options.maxFrames && options.maxFrames > 0 ? options.maxFrames : 30;
+    const isCandidate = Boolean(options.isCandidate);
     const frames: ExtractedFrame[] = [];
 
     const thumbnailsDir = path.resolve(process.cwd(), 'data', 'thumbnails');
@@ -401,86 +460,92 @@ export class FingerprintEngine {
       fs.mkdirSync(thumbnailsDir, { recursive: true });
     }
 
-    const isLocalFile = fs.existsSync(videoPathOrUrl);
+    const resolvedInput = this.resolveMediaSourcePath(videoPathOrUrl);
+    const isLocalFile = fs.existsSync(resolvedInput);
+
+    if (!isLocalFile && !isCandidate) {
+      throw new Error(`Reference video file does not exist on disk: ${videoPathOrUrl}`);
+    }
+
+    const extractionId = `${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
+    const tempDir = path.join(process.cwd(), 'data', 'temp', `extract_sync_${extractionId}`);
 
     if (isLocalFile) {
-      const tempDir = path.join(process.cwd(), 'data', 'temp', `extract_sync_${Date.now()}_${Math.random().toString(36).substring(7)}`);
       try {
         fs.mkdirSync(tempDir, { recursive: true });
 
-        const rawOutputPath = path.join(tempDir, 'frames_9x8.raw');
+        // Step 1: Decode frames from the video file at calibrated interval directly into JPEG files
+        const thumbPattern = path.join(tempDir, 'thumb_%04d.jpg');
         execFileSync('ffmpeg', [
           '-y',
+          '-v', 'error',
           '-t', '120',
-          '-i', videoPathOrUrl,
-          '-vf', `fps=1/${intervalSec},scale=9:8,format=gray`,
-          '-vframes', `${maxFrames}`,
-          '-f', 'rawvideo',
-          rawOutputPath
+          '-i', resolvedInput,
+          '-vf', `fps=1/${intervalSec},scale=320:180`,
+          '-frames:v', `${maxFrames}`,
+          '-q:v', '3',
+          thumbPattern
         ], { timeout: 25000 });
 
-        let thumbFiles: string[] = [];
-        if (options.generateThumbnails !== false) {
-          const thumbPattern = path.join(tempDir, 'thumb_%04d.jpg');
-          try {
-            execFileSync('ffmpeg', [
-              '-y',
-              '-t', '120',
-              '-i', videoPathOrUrl,
-              '-vf', `fps=1/${intervalSec},scale=160:90`,
-              '-vframes', `${maxFrames}`,
-              '-q:v', '5',
-              thumbPattern
-            ], { timeout: 25000 });
+        const thumbFiles = fs.readdirSync(tempDir)
+          .filter(f => f.startsWith('thumb_') && f.endsWith('.jpg'))
+          .sort();
 
-            thumbFiles = fs.readdirSync(tempDir)
-              .filter(f => f.startsWith('thumb_') && f.endsWith('.jpg'))
-              .sort();
-          } catch {}
-        }
+        if (thumbFiles.length > 0) {
+          // Step 2: Decode the exact extracted JPEG frames into 9x8 grayscale raw buffers (72 bytes/frame)
+          const rawOutputPath = path.join(tempDir, 'frames_9x8.raw');
+          execFileSync('ffmpeg', [
+            '-y',
+            '-v', 'error',
+            '-framerate', '1',
+            '-i', thumbPattern,
+            '-vf', 'scale=9:8,format=gray',
+            '-f', 'rawvideo',
+            rawOutputPath
+          ], { timeout: 25000 });
 
-        if (fs.existsSync(rawOutputPath)) {
-          const rawBuffer = fs.readFileSync(rawOutputPath);
-          const frameChunkSize = 72;
-          const totalFrames = Math.floor(rawBuffer.length / frameChunkSize);
+          if (fs.existsSync(rawOutputPath)) {
+            const rawBuffer = fs.readFileSync(rawOutputPath);
+            const frameChunkSize = 72;
+            const totalFrames = Math.min(thumbFiles.length, Math.floor(rawBuffer.length / frameChunkSize));
 
-          for (let i = 0; i < totalFrames; i++) {
-            const chunk = rawBuffer.subarray(i * frameChunkSize, (i + 1) * frameChunkSize);
-            const { phash_hex, avg_luminance } = this.computeDHashFromGrayscale9x8(chunk);
-
-            let thumbnail_data: string | undefined;
-            let thumbnail_path: string | undefined;
-            let thumbnail_url: string | undefined;
-
-            if (thumbFiles[i]) {
+            for (let i = 0; i < totalFrames; i++) {
               const srcThumb = path.join(tempDir, thumbFiles[i]);
-              if (fs.existsSync(srcThumb)) {
-                const b64 = fs.readFileSync(srcThumb).toString('base64');
-                thumbnail_data = `data:image/jpeg;base64,${b64}`;
+              if (!fs.existsSync(srcThumb)) continue;
 
-                const filename = `thumb_${Date.now()}_${i}.jpg`;
-                const targetThumb = path.join(thumbnailsDir, filename);
-                try {
-                  fs.copyFileSync(srcThumb, targetThumb);
-                  thumbnail_path = `/thumbnails/${filename}`;
-                  thumbnail_url = `/thumbnails/${filename}`;
-                } catch {}
+              const jpegBuffer = fs.readFileSync(srcThumb);
+              if (jpegBuffer.length < 4 || jpegBuffer[0] !== 0xff || jpegBuffer[1] !== 0xd8) {
+                continue;
               }
-            }
 
-            frames.push({
-              timestamp_sec: i * intervalSec,
-              frame_index: i,
-              phash_hex,
-              avg_luminance,
-              thumbnail_data,
-              thumbnail_path,
-              thumbnail_url
-            });
+              const chunk = rawBuffer.subarray(i * frameChunkSize, (i + 1) * frameChunkSize);
+              const { phash_hex, avg_luminance } = this.computeDHashFromGrayscale9x8(chunk);
+
+              const filename = `thumb_${extractionId}_${i}.jpg`;
+              const targetThumb = path.join(thumbnailsDir, filename);
+              fs.copyFileSync(srcThumb, targetThumb);
+
+              const webRoute = `/thumbnails/${filename}`;
+              const b64 = jpegBuffer.toString('base64');
+              const thumbnail_data = `data:image/jpeg;base64,${b64}`;
+
+              frames.push({
+                timestamp_sec: Number((i * intervalSec).toFixed(2)),
+                frame_index: i,
+                phash_hex,
+                avg_luminance,
+                thumbnail_data,
+                thumbnail_path: webRoute,
+                thumbnail_url: webRoute
+              });
+            }
           }
         }
       } catch (err: any) {
-        console.warn(`[FFmpeg Engine Sync] Extraction notice: ${err.message}. Engaging pure-JS visual fallback.`);
+        if (!isCandidate) {
+          throw new Error(`Reference video frame extraction failed for "${videoPathOrUrl}": ${err.message}`);
+        }
+        console.warn(`[FFmpeg Engine Sync] Candidate extraction notice: ${err.message}.`);
       } finally {
         try {
           fs.rmSync(tempDir, { recursive: true, force: true });
@@ -489,6 +554,9 @@ export class FingerprintEngine {
     }
 
     if (frames.length === 0) {
+      if (!isCandidate) {
+        throw new Error(`No real video frames could be decoded by FFmpeg from reference source: ${videoPathOrUrl}`);
+      }
       const derivedTitle = options.title || path.basename(videoPathOrUrl) || 'Media Stream';
       return this.generateFallbackKeyframes(derivedTitle, {
         intervalSec,

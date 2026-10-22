@@ -158,6 +158,8 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     phash_hex: f.phash_hex,
     avg_luminance: f.avg_luminance,
     thumbnail_data: f.thumbnail_data,
+    thumbnail_path: f.thumbnail_path,
+    thumbnail_url: f.thumbnail_url,
     created_at: now
   }));
 
@@ -173,8 +175,8 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     source_type: 'FORENSIC_SAMPLE',
     source_url: 'https://broadcast-cdn.uefa.tv/master/arsenal_bayern_live.m3u8',
     file_path: uclMasterPath,
-    thumbnail_url: ref1Fingerprints[0]?.thumbnail_data,
-    first_thumbnail: ref1Fingerprints[0]?.thumbnail_data,
+    thumbnail_url: ref1Fingerprints[0]?.thumbnail_url || ref1Fingerprints[0]?.thumbnail_data,
+    first_thumbnail: ref1Fingerprints[0]?.thumbnail_url || ref1Fingerprints[0]?.thumbnail_data,
     created_at: now,
     status: 'REGISTERED',
     provenance_sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
@@ -207,6 +209,8 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     phash_hex: f.phash_hex,
     avg_luminance: f.avg_luminance,
     thumbnail_data: f.thumbnail_data,
+    thumbnail_path: f.thumbnail_path,
+    thumbnail_url: f.thumbnail_url,
     created_at: now
   }));
 
@@ -222,8 +226,8 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     source_type: 'FORENSIC_SAMPLE',
     source_url: 'https://secure-vault.aegisstudios.com/masters/apex_horizon_hdr.mp4',
     file_path: apexMasterPath,
-    thumbnail_url: ref2Fingerprints[0]?.thumbnail_data,
-    first_thumbnail: ref2Fingerprints[0]?.thumbnail_data,
+    thumbnail_url: ref2Fingerprints[0]?.thumbnail_url || ref2Fingerprints[0]?.thumbnail_data,
+    first_thumbnail: ref2Fingerprints[0]?.thumbnail_url || ref2Fingerprints[0]?.thumbnail_data,
     created_at: now,
     status: 'REGISTERED',
     provenance_sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0',
@@ -513,6 +517,8 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     phash_hex: f.phash_hex,
     avg_luminance: f.avg_luminance,
     thumbnail_data: f.thumbnail_data,
+    thumbnail_path: f.thumbnail_path,
+    thumbnail_url: f.thumbnail_url,
     created_at: now
   }));
 
@@ -528,8 +534,8 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     source_type: 'FORENSIC_SAMPLE',
     source_url: 'https://secure-vault.republicrecords.com/masters/taylor_swift_patient_zero_4k.mp4',
     file_path: tsMasterPath,
-    thumbnail_url: ref3Fingerprints[0]?.thumbnail_data,
-    first_thumbnail: ref3Fingerprints[0]?.thumbnail_data,
+    thumbnail_url: ref3Fingerprints[0]?.thumbnail_url || ref3Fingerprints[0]?.thumbnail_data,
+    first_thumbnail: ref3Fingerprints[0]?.thumbnail_url || ref3Fingerprints[0]?.thumbnail_data,
     created_at: now,
     status: 'REGISTERED',
     provenance_sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
@@ -1096,6 +1102,8 @@ export function ensureTaylorSwiftPatientZeroRegistered(): void {
     phash_hex: f.phash_hex,
     avg_luminance: f.avg_luminance,
     thumbnail_data: f.thumbnail_data,
+    thumbnail_path: f.thumbnail_path,
+    thumbnail_url: f.thumbnail_url,
     created_at: now
   }));
 
@@ -1111,8 +1119,8 @@ export function ensureTaylorSwiftPatientZeroRegistered(): void {
     source_type: 'FORENSIC_SAMPLE',
     source_url: 'https://secure-vault.republicrecords.com/masters/taylor_swift_patient_zero_4k.mp4',
     file_path: tsMasterPath,
-    thumbnail_url: fingerprints[0]?.thumbnail_data,
-    first_thumbnail: fingerprints[0]?.thumbnail_data,
+    thumbnail_url: fingerprints[0]?.thumbnail_url || fingerprints[0]?.thumbnail_data,
+    first_thumbnail: fingerprints[0]?.thumbnail_url || fingerprints[0]?.thumbnail_data,
     created_at: now,
     status: 'REGISTERED',
     provenance_sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',

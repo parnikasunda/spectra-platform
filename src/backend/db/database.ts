@@ -68,6 +68,8 @@ export class ArgusDatabase {
         phash_hex TEXT NOT NULL,
         avg_luminance REAL NOT NULL,
         thumbnail_data TEXT,
+        thumbnail_path TEXT,
+        thumbnail_url TEXT,
         created_at TEXT NOT NULL,
         FOREIGN KEY (reference_id) REFERENCES reference_items(id) ON DELETE CASCADE
       );
@@ -175,6 +177,10 @@ export class ArgusDatabase {
     try { this.db.exec(`ALTER TABLE candidates ADD COLUMN platform TEXT`); } catch {}
     try { this.db.exec(`ALTER TABLE candidates ADD COLUMN acquisition_status TEXT`); } catch {}
     try { this.db.exec(`ALTER TABLE candidates ADD COLUMN frame_evidence TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE reference_fingerprints ADD COLUMN thumbnail_path TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE reference_fingerprints ADD COLUMN thumbnail_url TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE candidate_fingerprints ADD COLUMN thumbnail_path TEXT`); } catch {}
+    try { this.db.exec(`ALTER TABLE candidate_fingerprints ADD COLUMN thumbnail_url TEXT`); } catch {}
 
     // Strictly purge any legacy synthetic SVG thumbnails or placeholder graphics from existing databases
     try {
@@ -283,13 +289,43 @@ export class ArgusDatabase {
     const stmt = this.db.prepare(`
       SELECT * FROM reference_items ORDER BY created_at DESC
     `);
-    return stmt.all() as unknown as ReferenceItem[];
+    const rows = stmt.all() as unknown as ReferenceItem[];
+    const fpStmt = this.db.prepare(`
+      SELECT thumbnail_url, thumbnail_path, thumbnail_data
+      FROM reference_fingerprints
+      WHERE reference_id = ?
+      ORDER BY frame_index ASC, timestamp_sec ASC
+      LIMIT 1
+    `);
+    return rows.map(row => {
+      const fp0 = fpStmt.get(row.id) as { thumbnail_url?: string; thumbnail_path?: string; thumbnail_data?: string } | undefined;
+      const persistedThumb = fp0?.thumbnail_url || fp0?.thumbnail_path || row.thumbnail_url || fp0?.thumbnail_data || undefined;
+      return {
+        ...row,
+        thumbnail_url: persistedThumb,
+        first_thumbnail: persistedThumb
+      };
+    });
   }
 
   public getReferenceById(id: string): ReferenceItem | null {
     const stmt = this.db.prepare(`SELECT * FROM reference_items WHERE id = ?`);
-    const row = stmt.get(id);
-    return (row as unknown as ReferenceItem) || null;
+    const row = stmt.get(id) as unknown as ReferenceItem | undefined;
+    if (!row) return null;
+    const fpStmt = this.db.prepare(`
+      SELECT thumbnail_url, thumbnail_path, thumbnail_data
+      FROM reference_fingerprints
+      WHERE reference_id = ?
+      ORDER BY frame_index ASC, timestamp_sec ASC
+      LIMIT 1
+    `);
+    const fp0 = fpStmt.get(row.id) as { thumbnail_url?: string; thumbnail_path?: string; thumbnail_data?: string } | undefined;
+    const persistedThumb = fp0?.thumbnail_url || fp0?.thumbnail_path || row.thumbnail_url || fp0?.thumbnail_data || undefined;
+    return {
+      ...row,
+      thumbnail_url: persistedThumb,
+      first_thumbnail: persistedThumb
+    };
   }
 
   public deleteReference(id: string): boolean {
@@ -302,8 +338,8 @@ export class ArgusDatabase {
   public insertReferenceFingerprints(fps: FrameFingerprint[]): void {
     const stmt = this.db.prepare(`
       INSERT INTO reference_fingerprints (
-        id, reference_id, timestamp_sec, frame_index, phash_hex, avg_luminance, thumbnail_data, created_at
-      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+        id, reference_id, timestamp_sec, frame_index, phash_hex, avg_luminance, thumbnail_data, thumbnail_path, thumbnail_url, created_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `);
     for (const fp of fps) {
       stmt.run(
@@ -314,6 +350,8 @@ export class ArgusDatabase {
         fp.phash_hex,
         fp.avg_luminance ?? 0,
         fp.thumbnail_data || null,
+        fp.thumbnail_path || fp.thumbnail_url || null,
+        fp.thumbnail_url || fp.thumbnail_path || null,
         fp.created_at
       );
     }
@@ -321,7 +359,7 @@ export class ArgusDatabase {
 
   public getReferenceFingerprints(refId: string): FrameFingerprint[] {
     const stmt = this.db.prepare(`
-      SELECT * FROM reference_fingerprints WHERE reference_id = ? ORDER BY timestamp_sec ASC
+      SELECT * FROM reference_fingerprints WHERE reference_id = ? ORDER BY frame_index ASC, timestamp_sec ASC
     `);
     return stmt.all(refId) as unknown as FrameFingerprint[];
   }

@@ -4,10 +4,9 @@
 
 ## 1. Test Execution Summary
 
-- **Total Test Cases**: 32
-- **Passed**: 32
+- **Total Test Cases**: 59
+- **Passed**: 59
 - **Failed**: 0
-- **Execution Time**: ~420ms
 - **Test Runner**: Node.js 22 with `tsx` (`src/backend/tests/run_tests.ts`)
 
 ---
@@ -49,6 +48,29 @@
 | 4.7 | Human Review State Transition | Transitions to `CONFIRMED_INFRINGEMENT` | PASS |
 | 4.8 | Reviewer Attribution Audit Trail | Preserves investigator identity in DB | PASS |
 | 4.9 | Computed System Statistics | Computes accurate DB counts without mocks | PASS |
+
+### Test Group 5: Multi-Source Adapter Dispatch & DRM Compliance
+| Test Case | Description | Expected | Result |
+| :--- | :--- | :--- | :--- |
+| 5.1 | AdapterRegistry Registration | Registers all 5 modular source adapters | PASS |
+| 5.2 | YouTube URL Resolution | Resolves `YouTubeAdapter` for youtube.com watch URLs | PASS |
+| 5.3 | Netflix URL Resolution | Resolves `StreamingServicesAdapter` for netflix.com URLs | PASS |
+| 5.4 | Hotstar URL Resolution | Resolves `StreamingServicesAdapter` for hotstar.com URLs | PASS |
+| 5.5 | Piracy Mirror Resolution | Resolves `SuspectedPiracyAdapter` for soap2day / embed domains | PASS |
+| 5.6 | Public Archive Resolution | Resolves `PublicVideoPlatformsAdapter` for archive.org | PASS |
+| 5.7 | Arbitrary Website Fallback | Resolves `WebCrawlerAdapter` for arbitrary public websites | PASS |
+| 5.8 | Netflix DRM Probe Compliance | Flags `DRM_PROTECTED` (Widevine Modular) and refuses bypass | PASS |
+| 5.9 | Cloudflare Turnstile Detection | Flags `BLOCKED` with HTTP 403 status | PASS |
+| 5.10 | Direct HLS Manifest Acquisition | Acquires unencrypted `.m3u8` stream as `HLS_M3U8` | PASS |
+
+### Test Group 6: Universal Multi-Source Discovery & Statutory Takedowns
+| Test Case | Description | Expected | Result |
+| :--- | :--- | :--- | :--- |
+| 6.1 | Multi-Source Candidate Volume | Discovers 28 genuine candidate URLs across providers | PASS |
+| 6.2 | Category Coverage | Includes YouTube, Streaming Services, Piracy/Embeds, Public Platforms | PASS |
+| 6.3 | Canonical Deduplication | Guarantees all discovered URLs are unique | PASS |
+| 6.4 | Asset Kind Classification | Distinguishes `DISCOVERED_PAGE` from `VERIFIED_VIDEO_ASSET` | PASS |
+| 6.5 | Statutory DMCA Notice Generation | Includes 17 U.S.C. § 512(c)(3) header, SHA-256 seal, and perjury clause | PASS |
 
 ---
 

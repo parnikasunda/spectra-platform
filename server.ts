@@ -87,7 +87,12 @@ async function startServer() {
     const existingRefs = db.getReferences();
     const existingCands = db.getCandidates();
     const streamCandFps = db.getCandidateFingerprints('cand_ts_streamtape');
-    if (existingRefs.length === 0 || existingCands.length < 12 || streamCandFps.length === 0) {
+    const hasPersistedRefJpegs = existingRefs.length > 0 && existingRefs.every(r => {
+      if (!r.thumbnail_url || !r.thumbnail_url.startsWith('/thumbnails/')) return false;
+      const diskPath = path.join(thumbnailsDir, path.basename(r.thumbnail_url));
+      return fs.existsSync(diskPath);
+    });
+    if (existingRefs.length === 0 || existingCands.length < 12 || streamCandFps.length === 0 || !hasPersistedRefJpegs) {
       console.log('[Server Startup] Initializing authentic forensic dataset with real extracted keyframes across all content types...');
       loadOptionalForensicTestSuite();
     } else {

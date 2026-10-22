@@ -100,11 +100,9 @@ export default function App() {
   };
 
   const handleResetDb = async () => {
-    if (!confirm('Are you sure you want to reset the database? All records and evidence dossiers will be cleared.')) {
-      return;
-    }
     try {
       await clearAllData();
+      setSelectedEvidence(null);
       showNotification('Database cleared to pristine empty state.', 'info');
       await loadAllData();
     } catch (err: any) {
@@ -113,7 +111,6 @@ export default function App() {
   };
 
   const handleDeleteReference = async (id: string) => {
-    if (!confirm('Delete this reference media item and all associated fingerprints?')) return;
     try {
       await deleteReference(id);
       showNotification('Reference item deleted.', 'info');

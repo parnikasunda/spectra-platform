@@ -76,6 +76,8 @@ export interface FrameFingerprint {
   phash_hex: string;
   avg_luminance?: number;
   thumbnail_data?: string; // base64 data URI
+  thumbnail_path?: string; // persisted /thumbnails/...jpg path
+  thumbnail_url?: string;  // persisted /thumbnails/...jpg URL
   created_at: string;
 }
 

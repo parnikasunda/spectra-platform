@@ -256,7 +256,13 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
               {/* Thumbnail Header with Metadata Overlay */}
               <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden border-b border-slate-800/60">
                 {(() => {
-                  const cardThumbSrc = resolveFrameImageUrl(ref.thumbnail_url || ref.first_thumbnail);
+                  const cardThumbSrc = resolveFrameImageUrl(
+                    ref.thumbnail_url ||
+                    ref.first_thumbnail ||
+                    ref.fingerprints?.[0]?.thumbnail_url ||
+                    ref.fingerprints?.[0]?.thumbnail_path ||
+                    ref.fingerprints?.[0]?.thumbnail_data
+                  );
                   if (cardThumbSrc && !failedThumbnails[ref.id]) {
                     return (
                       <img 
@@ -392,7 +398,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                       {/* Frame Thumbnail */}
                       <div className="w-28 h-16 bg-slate-900 rounded overflow-hidden shrink-0 border border-slate-800 relative">
                         {(() => {
-                          const frameSrc = resolveFrameImageUrl(fp.thumbnail_data || (fp as any).thumbnail_url || (fp as any).thumbnail_path);
+                          const frameSrc = resolveFrameImageUrl(fp.thumbnail_url || fp.thumbnail_path || fp.thumbnail_data);
                           const key = fp.id || `${idx}`;
                           if (frameSrc && !failedThumbnails[key]) {
                             return (

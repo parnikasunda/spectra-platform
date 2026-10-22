@@ -8,7 +8,8 @@ import {
   ReferenceItem, 
   DiscoveryJob, 
   CandidateItem, 
-  EvidenceRecord 
+  EvidenceRecord,
+  FrameFingerprint
 } from './types/client.js';
 
 export interface UploadConfig {

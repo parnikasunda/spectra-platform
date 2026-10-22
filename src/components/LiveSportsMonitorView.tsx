@@ -16,10 +16,12 @@ import {
   ChevronRight,
   TrendingDown,
   RefreshCw,
-  Zap
+  Zap,
+  AlertCircle
 } from 'lucide-react';
 import { CandidateItem, EvidenceRecord, ReferenceItem } from '../types/client.js';
 import { CandidateSourceLink } from './CandidateSourceLink.js';
+import { resolveFrameImageUrl } from '../utils/frameResolver.js';
 
 interface LiveSportsMonitorViewProps {
   references: ReferenceItem[];
@@ -29,6 +31,56 @@ interface LiveSportsMonitorViewProps {
   onNavigateToEvidence: (ev: EvidenceRecord) => void;
   onLaunchLiveSweep: () => void;
 }
+
+const LiveKeyframeThumbnailPreview: React.FC<{
+  label: string;
+  badgeClass: string;
+  timestampSec: number;
+  thumbnailSource?: string;
+  delaySec?: number;
+}> = ({ label, badgeClass, timestampSec, thumbnailSource, delaySec }) => {
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+  const src = resolveFrameImageUrl(thumbnailSource);
+
+  return (
+    <div className="w-28 sm:w-32 shrink-0 bg-slate-950 rounded border border-slate-800 overflow-hidden text-[10px] font-mono shadow-sm">
+      <div className="px-1.5 py-0.5 bg-slate-900 border-b border-slate-800 flex items-center justify-between text-[9px]">
+        <span className={badgeClass}>{label}</span>
+        <span className="text-slate-400">t={timestampSec.toFixed(1)}s</span>
+      </div>
+      <div className="aspect-video relative bg-slate-950 flex items-center justify-center">
+        {src && !failed ? (
+          <>
+            <img
+              src={src}
+              alt={`${label} frame at ${timestampSec}s`}
+              className="w-full h-full object-cover"
+              referrerPolicy="no-referrer"
+              onLoad={() => setLoading(false)}
+              onError={() => setFailed(true)}
+            />
+            {loading && (
+              <div className="absolute inset-0 bg-slate-950/80 flex items-center justify-center">
+                <div className="w-3.5 h-3.5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+              </div>
+            )}
+          </>
+        ) : (
+          <div className="w-full h-full flex flex-col items-center justify-center p-1 text-center bg-slate-950 text-slate-500">
+            <AlertCircle className="w-3.5 h-3.5 text-amber-500/80 mb-0.5" />
+            <span className="text-[9px] text-slate-400 leading-tight">Frame Unavailable</span>
+          </div>
+        )}
+      </div>
+      {delaySec !== undefined && delaySec > 0 && (
+        <div className="px-1 py-0.5 bg-slate-900/90 border-t border-slate-800 text-[9px] text-right text-cyan-300">
+          +{delaySec}s delay
+        </div>
+      )}
+    </div>
+  );
+};
 
 export const LiveSportsMonitorView: React.FC<LiveSportsMonitorViewProps> = ({
   references,
@@ -183,49 +235,71 @@ export const LiveSportsMonitorView: React.FC<LiveSportsMonitorViewProps> = ({
           </div>
         ) : (
           <div className="divide-y divide-slate-800/50">
-            {liveEvidence.map((ev) => (
-              <div
-                key={ev.id}
-                className="p-4 hover:bg-slate-800/30 transition-colors flex flex-col md:flex-row md:items-center justify-between gap-4"
-              >
-                <div className="space-y-1.5 flex-1 min-w-0">
-                  <div className="flex flex-wrap items-center gap-2 text-xs">
-                    <span className="font-bold text-white">{ev.reference_title}</span>
-                    <span className="text-slate-600">·</span>
-                    <span className="text-cyan-400 font-mono">{ev.candidate_domain}</span>
-                  </div>
-                  <div className="pt-0.5">
-                    <CandidateSourceLink
-                      url={ev.candidate_url}
-                      domain={ev.candidate_domain}
-                      candidateId={ev.candidate_id}
-                      compact={true}
-                      truncateLength={45}
-                    />
+            {liveEvidence.map((ev) => {
+              const firstPair = ev.sample_pairs?.[0];
+              return (
+                <div
+                  key={ev.id}
+                  className="p-4 hover:bg-slate-800/30 transition-colors flex flex-col lg:flex-row lg:items-center justify-between gap-4"
+                >
+                  <div className="space-y-2 flex-1 min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 text-xs">
+                      <span className="font-bold text-white">{ev.reference_title}</span>
+                      <span className="text-slate-600">·</span>
+                      <span className="text-cyan-400 font-mono">{ev.candidate_domain}</span>
+                    </div>
+                    <div className="pt-0.5">
+                      <CandidateSourceLink
+                        url={ev.candidate_url}
+                        domain={ev.candidate_domain}
+                        candidateId={ev.candidate_id}
+                        compact={true}
+                        truncateLength={45}
+                      />
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 font-mono">
+                      <span className="text-emerald-400 font-bold">Match: {(ev.confidence_score * 100).toFixed(1)}%</span>
+                      <span>·</span>
+                      <span className="text-cyan-300">Broadcast Delay: +{ev.temporal_offset_sec}s</span>
+                      <span>·</span>
+                      <span>Min Distance: {ev.min_hamming_dist} bits</span>
+                      <span>·</span>
+                      <span>Matched Frames: {ev.matched_frames_count} frames</span>
+                    </div>
                   </div>
 
-                  <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400 font-mono">
-                    <span className="text-emerald-400 font-bold">Match: {(ev.confidence_score * 100).toFixed(1)}%</span>
-                    <span>·</span>
-                    <span className="text-cyan-300">Broadcast Delay: +{ev.temporal_offset_sec}s</span>
-                    <span>·</span>
-                    <span>Min Distance: {ev.min_hamming_dist} bits</span>
-                    <span>·</span>
-                    <span>Matched Frames: {ev.matched_frames_count} frames</span>
+                  {/* Intercepted Live Frame Telemetry Previews */}
+                  {firstPair && (
+                    <div className="flex items-center gap-2.5 shrink-0 overflow-x-auto py-1">
+                      <LiveKeyframeThumbnailPreview
+                        label="REF MASTER"
+                        badgeClass="text-cyan-400 font-bold"
+                        timestampSec={firstPair.reference_timestamp_sec}
+                        thumbnailSource={firstPair.reference_thumbnail}
+                      />
+                      <LiveKeyframeThumbnailPreview
+                        label="LIVE PIRATE"
+                        badgeClass="text-rose-400 font-bold"
+                        timestampSec={firstPair.candidate_timestamp_sec}
+                        thumbnailSource={firstPair.candidate_thumbnail}
+                        delaySec={ev.temporal_offset_sec}
+                      />
+                    </div>
+                  )}
+
+                  <div className="flex items-center gap-3 shrink-0">
+                    <button
+                      onClick={() => onNavigateToEvidence(ev)}
+                      className="px-3 py-1.5 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors inline-flex items-center gap-1 cursor-pointer"
+                    >
+                      <span>Forensic Viewer</span>
+                      <ChevronRight className="w-3.5 h-3.5" />
+                    </button>
                   </div>
                 </div>
-
-                <div className="flex items-center gap-3 shrink-0">
-                  <button
-                    onClick={() => onNavigateToEvidence(ev)}
-                    className="px-3 py-1.5 text-xs font-medium text-slate-200 hover:text-white bg-slate-800 hover:bg-slate-700 rounded border border-slate-700 transition-colors inline-flex items-center gap-1 cursor-pointer"
-                  >
-                    <span>Forensic Viewer</span>
-                    <ChevronRight className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         )}
       </div>

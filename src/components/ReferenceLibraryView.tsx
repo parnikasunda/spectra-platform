@@ -40,21 +40,7 @@ interface ReferenceLibraryViewProps {
   onOpenRegisterModal: () => void;
 }
 
-const isAuthenticDecodedFrame = (thumb?: string): boolean => {
-  if (!thumb) return false;
-  const lower = thumb.toLowerCase();
-  if (lower.startsWith('data:image/svg') || lower.includes('<svg') || lower.endsWith('.svg')) return false;
-  if (lower.includes('pitch cam') || lower.includes('center circle') || lower.includes('title card')) return false;
-  return lower.startsWith('data:image/jpeg') || 
-         lower.startsWith('data:image/jpg') || 
-         lower.startsWith('data:image/png') || 
-         lower.startsWith('data:image/webp') || 
-         lower.startsWith('/thumbnails/') || 
-         lower.startsWith('/media/') || 
-         lower.startsWith('/uploads/') || 
-         lower.startsWith('http://') || 
-         lower.startsWith('https://');
-};
+import { resolveFrameImageUrl, isAuthenticDecodedFrame } from '../utils/frameResolver.js';
 
 export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
   references,
@@ -269,18 +255,27 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
             >
               {/* Thumbnail Header with Metadata Overlay */}
               <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden border-b border-slate-800/60">
-                {(ref.thumbnail_url || ref.first_thumbnail) && isAuthenticDecodedFrame(ref.thumbnail_url || ref.first_thumbnail) ? (
-                  <img 
-                    src={ref.thumbnail_url || ref.first_thumbnail} 
-                    alt={ref.title} 
-                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                  />
-                ) : (
-                  <div className="text-slate-700 flex flex-col items-center gap-1">
-                    <FileVideo className="w-8 h-8 opacity-40 text-slate-500" />
-                    <span className="text-[10px] uppercase font-mono text-slate-500">Video Master Registered</span>
-                  </div>
-                )}
+                {(() => {
+                  const cardThumbSrc = resolveFrameImageUrl(ref.thumbnail_url || ref.first_thumbnail);
+                  if (cardThumbSrc && !failedThumbnails[ref.id]) {
+                    return (
+                      <img 
+                        src={cardThumbSrc} 
+                        alt={ref.title} 
+                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        referrerPolicy="no-referrer"
+                        onError={() => setFailedThumbnails(prev => ({ ...prev, [ref.id]: true }))}
+                      />
+                    );
+                  }
+                  return (
+                    <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 text-center p-2 bg-slate-950">
+                      <AlertCircle className="w-6 h-6 text-amber-400 mb-1 shrink-0" />
+                      <span className="text-xs font-medium text-slate-300">Reference Frame Unavailable</span>
+                      <span className="text-[10px] text-slate-500 font-mono">Ground-truth keyframe extraction pending</span>
+                    </div>
+                  );
+                })()}
                 
                 <div className="absolute top-2 left-2">
                   <span className="px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase bg-slate-950/80 backdrop-blur-md text-cyan-300 border border-cyan-500/30 rounded">
@@ -396,20 +391,27 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                     >
                       {/* Frame Thumbnail */}
                       <div className="w-28 h-16 bg-slate-900 rounded overflow-hidden shrink-0 border border-slate-800 relative">
-                        {fp.thumbnail_data && isAuthenticDecodedFrame(fp.thumbnail_data) && !failedThumbnails[fp.id || `${idx}`] ? (
-                          <img 
-                            src={fp.thumbnail_data} 
-                            alt={`Decoded Reference Frame @ ${fp.timestamp_sec}s`}
-                            className="w-full h-full object-cover" 
-                            referrerPolicy="no-referrer"
-                            onError={() => setFailedThumbnails(prev => ({ ...prev, [fp.id || `${idx}`]: true }))}
-                          />
-                        ) : (
-                          <div className="w-full h-full flex flex-col items-center justify-center p-1 text-center bg-slate-950 text-slate-400">
-                            <AlertCircle className="w-4 h-4 text-amber-400 mb-0.5 shrink-0" />
-                            <span className="text-[9px] font-mono text-amber-300">Frame Unavailable</span>
-                          </div>
-                        )}
+                        {(() => {
+                          const frameSrc = resolveFrameImageUrl(fp.thumbnail_data || (fp as any).thumbnail_url || (fp as any).thumbnail_path);
+                          const key = fp.id || `${idx}`;
+                          if (frameSrc && !failedThumbnails[key]) {
+                            return (
+                              <img 
+                                src={frameSrc} 
+                                alt={`Decoded Reference Frame @ ${fp.timestamp_sec}s`}
+                                className="w-full h-full object-cover" 
+                                referrerPolicy="no-referrer"
+                                onError={() => setFailedThumbnails(prev => ({ ...prev, [key]: true }))}
+                              />
+                            );
+                          }
+                          return (
+                            <div className="w-full h-full flex flex-col items-center justify-center p-1 text-center bg-slate-950 text-slate-400">
+                              <AlertCircle className="w-4 h-4 text-amber-400 mb-0.5 shrink-0" />
+                              <span className="text-[9px] font-mono text-amber-300">Frame Unavailable</span>
+                            </div>
+                          );
+                        })()}
                         <span className="absolute bottom-1 right-1 px-1 py-0.2 bg-black/80 font-mono text-[9px] text-slate-300 rounded">
                           {fp.timestamp_sec.toFixed(1)}s
                         </span>

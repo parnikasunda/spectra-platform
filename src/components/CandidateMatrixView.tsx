@@ -26,21 +26,7 @@ import { CandidateItem, PipelineStatus, ReferenceItem, FrameFingerprint } from '
 import { fetchCandidateById } from '../api.js';
 import { CandidateSourceLink } from './CandidateSourceLink.js';
 
-const isAuthenticDecodedFrame = (thumb?: string): boolean => {
-  if (!thumb) return false;
-  const lower = thumb.toLowerCase();
-  if (lower.startsWith('data:image/svg') || lower.includes('<svg') || lower.endsWith('.svg')) return false;
-  if (lower.includes('pitch cam') || lower.includes('center circle') || lower.includes('title card')) return false;
-  return lower.startsWith('data:image/jpeg') || 
-         lower.startsWith('data:image/jpg') || 
-         lower.startsWith('data:image/png') || 
-         lower.startsWith('data:image/webp') || 
-         lower.startsWith('/thumbnails/') || 
-         lower.startsWith('/media/') || 
-         lower.startsWith('/uploads/') || 
-         lower.startsWith('http://') || 
-         lower.startsWith('https://');
-};
+import { resolveFrameImageUrl, isAuthenticDecodedFrame } from '../utils/frameResolver.js';
 
 interface CandidateMatrixViewProps {
   candidates: CandidateItem[];
@@ -471,33 +457,38 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
                   </div>
                 ) : candidateDetails?.fingerprints && candidateDetails.fingerprints.length > 0 ? (
                   <div className="grid grid-cols-2 sm:grid-cols-3 gap-2.5 max-h-56 overflow-y-auto p-2 bg-slate-950 rounded border border-slate-800">
-                    {candidateDetails.fingerprints.map((fp, idx) => (
-                      <div key={fp.id || idx} className="bg-slate-900 border border-slate-800 rounded p-1.5 space-y-1">
-                        <div className="relative aspect-video bg-slate-950 rounded overflow-hidden flex items-center justify-center">
-                          {fp.thumbnail_data && isAuthenticDecodedFrame(fp.thumbnail_data) && !failedThumbnails[fp.id || `${idx}`] ? (
-                            <img
-                              src={fp.thumbnail_data}
-                              alt={`Keyframe at ${fp.timestamp_sec}s`}
-                              className="w-full h-full object-cover"
-                              referrerPolicy="no-referrer"
-                              onError={() => setFailedThumbnails(prev => ({ ...prev, [fp.id || `${idx}`]: true }))}
-                            />
-                          ) : (
-                            <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 text-center p-1">
-                              <AlertCircle className="w-4 h-4 text-amber-400 mb-0.5 shrink-0" />
-                              <span className="text-[8px] font-mono text-amber-300">Frame Unavailable</span>
-                            </div>
-                          )}
-                          <span className="absolute bottom-1 right-1 px-1 bg-black/80 font-mono text-[9px] text-slate-300 rounded">
-                            t = {fp.timestamp_sec.toFixed(1)}s
-                          </span>
+                    {candidateDetails.fingerprints.map((fp, idx) => {
+                      const frameSrc = resolveFrameImageUrl(fp.thumbnail_data || (fp as any).thumbnail_url || (fp as any).thumbnail_path);
+                      const key = fp.id || `${idx}`;
+                      const isFailed = failedThumbnails[key];
+                      return (
+                        <div key={key} className="bg-slate-900 border border-slate-800 rounded p-1.5 space-y-1">
+                          <div className="relative aspect-video bg-slate-950 rounded overflow-hidden flex items-center justify-center">
+                            {frameSrc && !isFailed ? (
+                              <img
+                                src={frameSrc}
+                                alt={`Candidate keyframe at ${fp.timestamp_sec}s`}
+                                className="w-full h-full object-cover"
+                                referrerPolicy="no-referrer"
+                                onError={() => setFailedThumbnails(prev => ({ ...prev, [key]: true }))}
+                              />
+                            ) : (
+                              <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 text-center p-1">
+                                <AlertCircle className="w-4 h-4 text-amber-400 mb-0.5 shrink-0" />
+                                <span className="text-[8px] font-mono text-amber-300">Frame Unavailable</span>
+                              </div>
+                            )}
+                            <span className="absolute bottom-1 right-1 px-1 bg-black/80 font-mono text-[9px] text-slate-300 rounded">
+                              t = {fp.timestamp_sec.toFixed(1)}s
+                            </span>
+                          </div>
+                          <div className="text-[9px] font-mono text-slate-400 truncate flex items-center justify-between">
+                            <span className="text-cyan-400">#{fp.frame_index ?? idx}</span>
+                            <span className="truncate max-w-[90px]">{fp.phash_hex}</span>
+                          </div>
                         </div>
-                        <div className="text-[9px] font-mono text-slate-400 truncate flex items-center justify-between">
-                          <span className="text-cyan-400">#{fp.frame_index ?? idx}</span>
-                          <span className="truncate max-w-[90px]">{fp.phash_hex}</span>
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 ) : (
                   <div className="p-3 bg-slate-950 rounded border border-slate-800 flex items-center gap-2.5 text-xs text-slate-400">

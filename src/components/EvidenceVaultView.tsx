@@ -34,23 +34,7 @@ interface EvidenceVaultViewProps {
   onRefresh: () => void;
 }
 
-const isAuthenticDecodedFrame = (thumb?: string): boolean => {
-  if (!thumb) return false;
-  const lower = thumb.toLowerCase();
-  // Filter out any SVG vector graphic, synthetic pitch or title card mock
-  if (lower.startsWith('data:image/svg') || lower.includes('<svg') || lower.endsWith('.svg')) return false;
-  if (lower.includes('pitch cam') || lower.includes('center circle') || lower.includes('title card')) return false;
-  // Must be genuine image data or URL
-  return lower.startsWith('data:image/jpeg') || 
-         lower.startsWith('data:image/jpg') || 
-         lower.startsWith('data:image/png') || 
-         lower.startsWith('data:image/webp') || 
-         lower.startsWith('/thumbnails/') || 
-         lower.startsWith('/media/') || 
-         lower.startsWith('/uploads/') || 
-         lower.startsWith('http://') || 
-         lower.startsWith('https://');
-};
+import { resolveFrameImageUrl, isAuthenticDecodedFrame } from '../utils/frameResolver.js';
 
 export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
   evidenceRecords,
@@ -323,29 +307,35 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
                         </div>
 
                         <div className="aspect-video bg-slate-900 rounded overflow-hidden flex items-center justify-center relative border border-slate-800">
-                          {isAuthenticDecodedFrame(currentPair.reference_thumbnail) && !refImgFailed[activeFrameIndex] ? (
-                            <>
-                              <img 
-                                src={currentPair.reference_thumbnail} 
-                                alt={`Reference frame at ${currentPair.reference_timestamp_sec}s`} 
-                                className="w-full h-full object-cover"
-                                referrerPolicy="no-referrer"
-                                onLoad={() => setRefImgLoading(prev => ({ ...prev, [activeFrameIndex]: false }))}
-                                onError={() => setRefImgFailed(prev => ({ ...prev, [activeFrameIndex]: true }))}
-                              />
-                              {refImgLoading[activeFrameIndex] && (
-                                <div className="absolute inset-0 bg-slate-950/80 flex items-center justify-center">
-                                  <div className="w-5 h-5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-slate-950 text-slate-400 space-y-1">
-                              <AlertCircle className="w-6 h-6 text-amber-400 shrink-0" />
-                              <span className="font-semibold text-xs text-white">Missing Reference Evidence</span>
-                              <span className="text-[10px] text-slate-500 font-mono">Original frame file missing or extraction failed</span>
-                            </div>
-                          )}
+                          {(() => {
+                            const refSrc = resolveFrameImageUrl(currentPair.reference_thumbnail);
+                            if (refSrc && !refImgFailed[activeFrameIndex]) {
+                              return (
+                                <>
+                                  <img 
+                                    src={refSrc} 
+                                    alt={`Reference frame at ${currentPair.reference_timestamp_sec}s`} 
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                    onLoad={() => setRefImgLoading(prev => ({ ...prev, [activeFrameIndex]: false }))}
+                                    onError={() => setRefImgFailed(prev => ({ ...prev, [activeFrameIndex]: true }))}
+                                  />
+                                  {refImgLoading[activeFrameIndex] && (
+                                    <div className="absolute inset-0 bg-slate-950/80 flex items-center justify-center">
+                                      <div className="w-5 h-5 border-2 border-cyan-400 border-t-transparent rounded-full animate-spin" />
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            }
+                            return (
+                              <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-slate-950 text-slate-400 space-y-1">
+                                <AlertCircle className="w-6 h-6 text-amber-400 shrink-0" />
+                                <span className="font-semibold text-xs text-white">Missing Reference Evidence</span>
+                                <span className="text-[10px] text-slate-500 font-mono">Original frame file missing or extraction failed</span>
+                              </div>
+                            );
+                          })()}
                           <span className="absolute top-2 left-2 bg-black/80 px-1.5 py-0.5 rounded text-[10px] font-mono text-cyan-300 border border-cyan-800/60 z-10">
                             REF MASTER
                           </span>
@@ -364,29 +354,35 @@ export const EvidenceVaultView: React.FC<EvidenceVaultViewProps> = ({
                         </div>
 
                         <div className="aspect-video bg-slate-900 rounded overflow-hidden flex items-center justify-center relative border border-slate-800">
-                          {isAuthenticDecodedFrame(currentPair.candidate_thumbnail) && !candImgFailed[activeFrameIndex] ? (
-                            <>
-                              <img 
-                                src={currentPair.candidate_thumbnail} 
-                                alt={`Candidate frame at ${currentPair.candidate_timestamp_sec}s`} 
-                                className="w-full h-full object-cover"
-                                referrerPolicy="no-referrer"
-                                onLoad={() => setCandImgLoading(prev => ({ ...prev, [activeFrameIndex]: false }))}
-                                onError={() => setCandImgFailed(prev => ({ ...prev, [activeFrameIndex]: true }))}
-                              />
-                              {candImgLoading[activeFrameIndex] && (
-                                <div className="absolute inset-0 bg-slate-950/80 flex items-center justify-center">
-                                  <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-                                </div>
-                              )}
-                            </>
-                          ) : (
-                            <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-slate-950 text-slate-400 space-y-1">
-                              <AlertCircle className="w-6 h-6 text-amber-400 shrink-0" />
-                              <span className="font-semibold text-xs text-white">Candidate Frame Unavailable</span>
-                              <span className="text-[10px] text-slate-500 font-mono">Stream media acquisition pending or blocked</span>
-                            </div>
-                          )}
+                          {(() => {
+                            const candSrc = resolveFrameImageUrl(currentPair.candidate_thumbnail);
+                            if (candSrc && !candImgFailed[activeFrameIndex]) {
+                              return (
+                                <>
+                                  <img 
+                                    src={candSrc} 
+                                    alt={`Candidate frame at ${currentPair.candidate_timestamp_sec}s`} 
+                                    className="w-full h-full object-cover"
+                                    referrerPolicy="no-referrer"
+                                    onLoad={() => setCandImgLoading(prev => ({ ...prev, [activeFrameIndex]: false }))}
+                                    onError={() => setCandImgFailed(prev => ({ ...prev, [activeFrameIndex]: true }))}
+                                  />
+                                  {candImgLoading[activeFrameIndex] && (
+                                    <div className="absolute inset-0 bg-slate-950/80 flex items-center justify-center">
+                                      <div className="w-5 h-5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                                    </div>
+                                  )}
+                                </>
+                              );
+                            }
+                            return (
+                              <div className="w-full h-full flex flex-col items-center justify-center p-4 text-center bg-slate-950 text-slate-400 space-y-1">
+                                <AlertCircle className="w-6 h-6 text-amber-400 shrink-0" />
+                                <span className="font-semibold text-xs text-white">Candidate Frame Unavailable</span>
+                                <span className="text-[10px] text-slate-500 font-mono">Stream media acquisition pending or blocked</span>
+                              </div>
+                            );
+                          })()}
                           <span className="absolute top-2 left-2 bg-amber-950/80 border border-amber-600/50 px-1.5 py-0.5 rounded text-[10px] font-mono text-amber-300 z-10">
                             CANDIDATE STREAM
                           </span>

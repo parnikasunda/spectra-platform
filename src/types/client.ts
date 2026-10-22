@@ -122,9 +122,12 @@ export interface CandidateItem {
   pipeline_status: PipelineStatus;
   reachability_code: number;
   reachability_latency_ms: number;
-  media_type: 'HLS_M3U8' | 'MP4' | 'WEBM' | 'HTML_PLAYER' | 'DASH_MPD' | 'UNKNOWN';
+  media_type: 'HLS_M3U8' | 'MP4' | 'WEBM' | 'HTML_PLAYER' | 'DASH_MPD' | 'DASH_DRM' | 'UNKNOWN';
   media_resolution?: string;
   media_duration_sec?: number;
+  media_fps?: number;
+  file_path?: string;
+  thumbnail_url?: string;
   is_live_stream: boolean;
   drm_scheme?: string;
   raw_headers_json?: string;

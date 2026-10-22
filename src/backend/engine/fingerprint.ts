@@ -29,8 +29,9 @@ export interface ExtractedFrame {
   frame_index: number;
   phash_hex: string;
   avg_luminance: number;
-  thumbnail_data?: string; // base64 Data URI (JPEG or SVG)
-  thumbnail_path?: string; // local file path in ./data/thumbnails/
+  thumbnail_data?: string; // base64 Data URI
+  thumbnail_path?: string; // accessible path or URL
+  thumbnail_url?: string;  // web-accessible /thumbnails/... route
 }
 
 export class FingerprintEngine {
@@ -322,6 +323,7 @@ export class FingerprintEngine {
             
             let thumbnail_data: string | undefined;
             let thumbnail_path: string | undefined;
+            let thumbnail_url: string | undefined;
 
             if (thumbFiles[i]) {
               const srcThumb = path.join(tempDir, thumbFiles[i]);
@@ -329,10 +331,12 @@ export class FingerprintEngine {
                 const b64 = fs.readFileSync(srcThumb).toString('base64');
                 thumbnail_data = `data:image/jpeg;base64,${b64}`;
 
-                const targetThumb = path.join(thumbnailsDir, `thumb_${Date.now()}_${i}.jpg`);
+                const filename = `thumb_${Date.now()}_${i}.jpg`;
+                const targetThumb = path.join(thumbnailsDir, filename);
                 try {
                   fs.copyFileSync(srcThumb, targetThumb);
-                  thumbnail_path = targetThumb;
+                  thumbnail_path = `/thumbnails/${filename}`;
+                  thumbnail_url = `/thumbnails/${filename}`;
                 } catch {}
               }
             }
@@ -343,7 +347,8 @@ export class FingerprintEngine {
               phash_hex,
               avg_luminance,
               thumbnail_data,
-              thumbnail_path
+              thumbnail_path,
+              thumbnail_url
             });
           }
         }
@@ -445,6 +450,7 @@ export class FingerprintEngine {
 
             let thumbnail_data: string | undefined;
             let thumbnail_path: string | undefined;
+            let thumbnail_url: string | undefined;
 
             if (thumbFiles[i]) {
               const srcThumb = path.join(tempDir, thumbFiles[i]);
@@ -452,10 +458,12 @@ export class FingerprintEngine {
                 const b64 = fs.readFileSync(srcThumb).toString('base64');
                 thumbnail_data = `data:image/jpeg;base64,${b64}`;
 
-                const targetThumb = path.join(thumbnailsDir, `thumb_${Date.now()}_${i}.jpg`);
+                const filename = `thumb_${Date.now()}_${i}.jpg`;
+                const targetThumb = path.join(thumbnailsDir, filename);
                 try {
                   fs.copyFileSync(srcThumb, targetThumb);
-                  thumbnail_path = targetThumb;
+                  thumbnail_path = `/thumbnails/${filename}`;
+                  thumbnail_url = `/thumbnails/${filename}`;
                 } catch {}
               }
             }
@@ -466,7 +474,8 @@ export class FingerprintEngine {
               phash_hex,
               avg_luminance,
               thumbnail_data,
-              thumbnail_path
+              thumbnail_path,
+              thumbnail_url
             });
           }
         }
@@ -812,8 +821,8 @@ export class FingerprintEngine {
       similarity_pct: this.similarityPercentage(m.distance),
       reference_phash: m.refFp.phash_hex,
       candidate_phash: m.candFp.phash_hex,
-      reference_thumbnail: m.refFp.thumbnail_data,
-      candidate_thumbnail: m.candFp.thumbnail_data
+      reference_thumbnail: m.refFp.thumbnail_data || (m.refFp as any).thumbnail_url || (m.refFp as any).thumbnail_path,
+      candidate_thumbnail: m.candFp.thumbnail_data || (m.candFp as any).thumbnail_url || (m.candFp as any).thumbnail_path
     }));
 
     return {

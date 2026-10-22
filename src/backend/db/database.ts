@@ -13,7 +13,8 @@ import {
   DiscoveryJob, 
   CandidateItem, 
   EvidenceRecord, 
-  SystemStats 
+  SystemStats,
+  MatchedKeyframePair 
 } from '../types.js';
 
 const DATA_DIR = path.resolve(process.cwd(), 'data');

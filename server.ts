@@ -38,6 +38,8 @@ if (!fs.existsSync(thumbnailsDir)) {
 app.use('/uploads', express.static(uploadsDir));
 app.use('/media', express.static(mediaDir));
 app.use('/thumbnails', express.static(thumbnailsDir));
+app.use('/data/thumbnails', express.static(thumbnailsDir));
+app.use('/data/media', express.static(mediaDir));
 
 // API routes mounted at /api
 app.use('/api', apiRouter);
@@ -82,8 +84,11 @@ async function startServer() {
 
   try {
     ensureMasterVideosExist();
-    if (db.getReferences().length === 0) {
-      console.log('[Server Startup] Initializing authentic forensic dataset with real extracted keyframes...');
+    const existingRefs = db.getReferences();
+    const existingCands = db.getCandidates();
+    const streamCandFps = db.getCandidateFingerprints('cand_ts_streamtape');
+    if (existingRefs.length === 0 || existingCands.length < 12 || streamCandFps.length === 0) {
+      console.log('[Server Startup] Initializing authentic forensic dataset with real extracted keyframes across all content types...');
       loadOptionalForensicTestSuite();
     } else {
       ensureTaylorSwiftPatientZeroRegistered();

@@ -88,6 +88,17 @@ export function ensureMasterVideosExist() {
     } catch {}
   }
 
+  const apexCand = path.join(mediaDir, 'apex_horizon_candidate_leak.mp4');
+  if (!fs.existsSync(apexCand) && fs.existsSync(apexMaster)) {
+    try {
+      execFileSync('ffmpeg', [
+        '-i', apexMaster,
+        '-vf', 'scale=480:270,drawbox=x=10:y=10:w=50:h=15:color=yellow@0.4:t=fill',
+        '-c:v', 'libx264', '-crf', '26', '-y', apexCand
+      ], { timeout: 20000 });
+    } catch {}
+  }
+
   const culinarySample = path.join(mediaDir, 'culinary_public_sample.mp4');
   if (!fs.existsSync(culinarySample)) {
     try {
@@ -804,6 +815,18 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   };
   db.upsertCandidate(candTsStreamtape);
 
+  const candTsStreamtapeFps: FrameFingerprint[] = extractedCandTsYt.slice(0, 6).map((f, idx) => ({
+    id: `cfp_ts_stream_${idx}`,
+    candidate_id: 'cand_ts_streamtape',
+    timestamp_sec: f.timestamp_sec,
+    frame_index: f.frame_index,
+    phash_hex: f.phash_hex,
+    avg_luminance: f.avg_luminance,
+    thumbnail_data: f.thumbnail_data,
+    created_at: now
+  }));
+  db.insertCandidateFingerprints(candTsStreamtapeFps);
+
   // 6. Public Video Archive (Archive.org)
   const candTsArchive: CandidateItem = {
     id: 'cand_ts_archive_org',
@@ -826,6 +849,18 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     last_inspected_at: new Date(Date.now() - 300000).toISOString()
   };
   db.upsertCandidate(candTsArchive);
+
+  const candTsArchiveFps: FrameFingerprint[] = extractedCandTsYt.slice(0, 6).map((f, idx) => ({
+    id: `cfp_ts_arch_${idx}`,
+    candidate_id: 'cand_ts_archive_org',
+    timestamp_sec: f.timestamp_sec,
+    frame_index: f.frame_index,
+    phash_hex: f.phash_hex,
+    avg_luminance: f.avg_luminance,
+    thumbnail_data: f.thumbnail_data,
+    created_at: now
+  }));
+  db.insertCandidateFingerprints(candTsArchiveFps);
 
   // 7. Embedded Player Gateway (VidSrc)
   const candTsVidSrc: CandidateItem = {
@@ -893,9 +928,141 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   };
   db.upsertCandidate(candTsDead);
 
+  // -------------------------------------------------------------
+  // VOD Feature Film / Movie Candidates & Evidence (Apex Horizon)
+  // -------------------------------------------------------------
+  const apexJobId = 'job_sweep_apex_vod';
+  const apexJob: DiscoveryJob = {
+    id: apexJobId,
+    name: 'Automated Catalog Sweep: Apex Horizon Feature Master',
+    target_reference_id: ref2Id,
+    provider: 'SUSPECTED_PIRACY',
+    query_params: JSON.stringify({ keywords: 'Apex Horizon 2026 1080p full movie leak' }),
+    status: 'COMPLETED',
+    candidates_found: 2,
+    started_at: new Date(Date.now() - 2600000).toISOString(),
+    completed_at: new Date(Date.now() - 2500000).toISOString()
+  };
+  db.insertDiscoveryJob(apexJob);
+
+  const apexCandVideo = fs.existsSync(path.resolve(process.cwd(), 'data', 'media', 'apex_horizon_candidate_leak.mp4'))
+    ? path.resolve(process.cwd(), 'data', 'media', 'apex_horizon_candidate_leak.mp4')
+    : (fs.existsSync(path.resolve(process.cwd(), 'data', 'media', 'apex_horizon_master.mp4'))
+        ? path.resolve(process.cwd(), 'data', 'media', 'apex_horizon_master.mp4')
+        : apexMasterPath);
+
+  const extractedApexCandFrames = FingerprintEngine.extractVideoFingerprintsSync(apexCandVideo, {
+    intervalSec: 2,
+    maxFrames: 6,
+    generateThumbnails: true,
+    title: 'Apex Horizon WEB-DL Rip'
+  });
+
+  const candApexFmovies: CandidateItem = {
+    id: 'cand_apex_fmovies_leak',
+    job_id: apexJobId,
+    reference_id: ref2Id,
+    source_url: 'https://fmovies-mirror.to/movie/apex-horizon-2026-1080p-leak.mp4',
+    domain: 'fmovies-mirror.to',
+    discovered_title: 'Apex Horizon (2026) 1080p WEB-DL Rip x264',
+    discovery_provider: 'SUSPECTED_PIRACY',
+    source_category: 'SUSPECTED_PIRACY',
+    asset_kind: 'VERIFIED_VIDEO_ASSET',
+    discovered_at: new Date(Date.now() - 2500000).toISOString(),
+    pipeline_status: 'ANALYZED',
+    reachability_code: 200,
+    reachability_latency_ms: 82.4,
+    media_type: 'MP4',
+    media_resolution: '1920x1080',
+    is_live_stream: false,
+    verification_logs: '[SuspectedPiracyAdapter] Direct cyberlocker MP4 stream intercepted.\n[Acquisition] Keyframes extracted via hardware decoder.\n[Matching] Sequence comparison confirmed 6/6 frames with +4s delay. Classification: FULL_COPY.',
+    last_inspected_at: new Date(Date.now() - 100000).toISOString()
+  };
+  db.upsertCandidate(candApexFmovies);
+
+  const candApexFps: FrameFingerprint[] = extractedApexCandFrames.map((f, idx) => ({
+    id: `cfp_apex_${idx}`,
+    candidate_id: 'cand_apex_fmovies_leak',
+    timestamp_sec: f.timestamp_sec,
+    frame_index: f.frame_index,
+    phash_hex: f.phash_hex,
+    avg_luminance: f.avg_luminance,
+    thumbnail_data: f.thumbnail_data,
+    created_at: now
+  }));
+  db.insertCandidateFingerprints(candApexFps);
+
+  const compApex = FingerprintEngine.compareFingerprintSequences(candApexFps, ref2Fingerprints);
+  const sealApex = FingerprintEngine.generateCustodySeal({
+    candidateUrl: candApexFmovies.source_url,
+    referenceId: ref2Id,
+    confidenceScore: compApex.confidenceScore,
+    minHammingDist: compApex.minHammingDist,
+    temporalOffsetSec: compApex.temporalOffsetSec,
+    samplePairs: compApex.samplePairs
+  });
+
+  const evApex: EvidenceRecord = {
+    id: 'ev_apex_fmovies_match',
+    candidate_id: 'cand_apex_fmovies_leak',
+    reference_id: ref2Id,
+    candidate_url: candApexFmovies.source_url,
+    candidate_domain: candApexFmovies.domain,
+    reference_title: ref2.title,
+    rights_holder: ref2.rights_holder,
+    match_status: compApex.matchStatus,
+    match_classification: compApex.matchClassification,
+    confidence_score: compApex.confidenceScore,
+    min_hamming_dist: compApex.minHammingDist,
+    avg_hamming_dist: compApex.avgHammingDist,
+    matched_frames_count: compApex.matchedFramesCount,
+    total_compared_frames: compApex.totalComparedFrames,
+    temporal_offset_sec: compApex.temporalOffsetSec,
+    sample_pairs: compApex.samplePairs,
+    audio_match: {
+      has_audio: true,
+      audio_fingerprint_supported: true,
+      audio_similarity_pct: 92.5,
+      matched_duration_sec: 12.0,
+      audio_hash_sample: 'a4b4c4d4e4f40414'
+    },
+    chain_of_custody_sha256: sealApex,
+    review_decision: 'CONFIRMED',
+    reviewed_by: 'Senior Investigator Michael Chen',
+    review_notes: 'High-definition VOD feature film pirate leak verified against studio theatrical master.',
+    reviewed_at: new Date(Date.now() - 120000).toISOString(),
+    created_at: now
+  };
+  db.insertEvidenceRecord(evApex);
+
+  const candApexPrime: CandidateItem = {
+    id: 'cand_apex_prime_drm',
+    job_id: apexJobId,
+    reference_id: ref2Id,
+    source_url: 'https://www.primevideo.com/detail/apex-horizon/0T3XYZ9182',
+    domain: 'primevideo.com',
+    discovered_title: 'Apex Horizon — Prime Video 4K UHD Master (Authorized SVOD)',
+    discovery_provider: 'STREAMING_SERVICES',
+    source_category: 'STREAMING_SERVICE',
+    asset_kind: 'DISCOVERED_PAGE',
+    discovered_at: new Date(Date.now() - 2500000).toISOString(),
+    pipeline_status: 'DRM_PROTECTED',
+    drm_scheme: 'Widevine Modular L1 / PlayReady SL3000',
+    reachability_code: 200,
+    reachability_latency_ms: 64.1,
+    media_type: 'DASH_DRM',
+    media_resolution: '3840x2160',
+    is_live_stream: false,
+    verification_logs: '[StreamingServicesAdapter] Authorized commercial catalog verified.\n[Compliance] Widevine Modular L1 encryption detected. Access control enforced.',
+    last_inspected_at: new Date(Date.now() - 90000).toISOString()
+  };
+  db.upsertCandidate(candApexPrime);
+
+  const allCandidates = db.getCandidates();
+
   return {
     loadedReferences: 3,
-    loadedCandidates: 13
+    loadedCandidates: allCandidates.length
   };
 }
 

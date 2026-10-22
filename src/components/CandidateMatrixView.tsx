@@ -31,6 +31,7 @@ import { resolveFrameImageUrl, isAuthenticDecodedFrame } from '../utils/frameRes
 interface CandidateMatrixViewProps {
   candidates: CandidateItem[];
   references: ReferenceItem[];
+  initialReferenceId?: string;
   onRefresh: () => void;
   onVerifyCandidate: (candidateId: string, targetReferenceId?: string) => Promise<any>;
   onQuickInspect: (payload: { url: string; title?: string; target_reference_id?: string }) => Promise<any>;
@@ -40,6 +41,7 @@ interface CandidateMatrixViewProps {
 export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
   candidates,
   references,
+  initialReferenceId,
   onRefresh,
   onVerifyCandidate,
   onQuickInspect,
@@ -47,11 +49,19 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
 }) => {
   const [selectedCandidate, setSelectedCandidate] = useState<CandidateItem | null>(null);
   const [filterStatus, setFilterStatus] = useState<string>('ALL');
+  const [filterReferenceId, setFilterReferenceId] = useState<string>(initialReferenceId || '');
   const [searchQuery, setSearchQuery] = useState('');
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [errorBanner, setErrorBanner] = useState<string | null>(null);
   const [candidateDetails, setCandidateDetails] = useState<(CandidateItem & { fingerprints?: FrameFingerprint[] }) | null>(null);
   const [isLoadingDetails, setIsLoadingDetails] = useState(false);
   const [failedThumbnails, setFailedThumbnails] = useState<Record<string, boolean>>({});
+
+  React.useEffect(() => {
+    if (initialReferenceId !== undefined) {
+      setFilterReferenceId(initialReferenceId);
+    }
+  }, [initialReferenceId]);
 
   React.useEffect(() => {
     if (selectedCandidate) {
@@ -68,12 +78,15 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
 
   // Quick inspect state
   const [quickUrl, setQuickUrl] = useState('');
-  const [quickRefId, setQuickRefId] = useState(references[0]?.id || '');
+  const [quickRefId, setQuickRefId] = useState(
+    references.find(r => r.status === 'REGISTERED')?.id || references[0]?.id || ''
+  );
   const [isQuickInspecting, setIsQuickInspecting] = useState(false);
   const [quickInspectResult, setQuickInspectResult] = useState<any | null>(null);
 
   const handleVerify = async (cand: CandidateItem) => {
     setVerifyingId(cand.id);
+    setErrorBanner(null);
     try {
       const res = await onVerifyCandidate(cand.id, cand.reference_id || undefined);
       if (res?.candidate) {
@@ -81,7 +94,7 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
       }
       onRefresh();
     } catch (err: any) {
-      alert(`Verification error: ${err.message}`);
+      setErrorBanner(`Verification error: ${err.message}`);
     } finally {
       setVerifyingId(null);
     }
@@ -93,6 +106,7 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
 
     setIsQuickInspecting(true);
     setQuickInspectResult(null);
+    setErrorBanner(null);
 
     try {
       const result = await onQuickInspect({
@@ -105,13 +119,14 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
       }
       onRefresh();
     } catch (err: any) {
-      alert(`Inspection failed: ${err.message}`);
+      setErrorBanner(`Inspection failed: ${err.message}`);
     } finally {
       setIsQuickInspecting(false);
     }
   };
 
   const filteredCandidates = candidates.filter(c => {
+    if (filterReferenceId && c.reference_id !== filterReferenceId) return false;
     if (filterStatus !== 'ALL' && c.pipeline_status !== filterStatus) return false;
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
@@ -124,22 +139,39 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
     return true;
   });
 
-  const getStatusBadge = (status: PipelineStatus) => {
+  const getStatusBadge = (cand: CandidateItem) => {
+    const status = cand.pipeline_status;
+    const acq = cand.acquisition_status || '';
     switch (status) {
       case 'ANALYZED':
-        return <span className="text-emerald-400 font-mono text-[11px] font-semibold">ANALYZED</span>;
+        if (acq === 'VERIFIED_PERCEPTUAL_MATCH' || acq === 'ACQUIRED_AND_VERIFIED') {
+          return (
+            <span className="text-rose-400 font-mono text-[11px] font-semibold flex items-center gap-1">
+              <AlertTriangle className="w-3 h-3" /> CONFIRMED_MATCH
+            </span>
+          );
+        }
+        return (
+          <span className="text-emerald-400 font-mono text-[11px] font-semibold flex items-center gap-1">
+            <CheckCircle2 className="w-3 h-3" /> ANALYZED (NO_MATCH)
+          </span>
+        );
       case 'ACQUIRED':
-        return <span className="text-cyan-400 font-mono text-[11px]">ACQUIRED</span>;
+        return <span className="text-cyan-400 font-mono text-[11px]">ACQUIRED (FRAMES_EXTRACTED)</span>;
       case 'MEDIA_DETECTED':
-        return <span className="text-blue-400 font-mono text-[11px]">MEDIA_DETECTED</span>;
+        return <span className="text-blue-400 font-mono text-[11px]">ACCESSIBLE (UNVERIFIED_MEDIA)</span>;
       case 'REACHABLE':
-        return <span className="text-slate-300 font-mono text-[11px]">REACHABLE</span>;
+        return <span className="text-slate-300 font-mono text-[11px]">ACCESSIBLE (WEB_PAGE)</span>;
       case 'DRM_PROTECTED':
-        return <span className="text-amber-400 font-mono text-[11px] flex items-center gap-1"><Lock className="w-3 h-3" /> DRM_PROTECTED</span>;
+        return <span className="text-amber-400 font-mono text-[11px] flex items-center gap-1"><Lock className="w-3 h-3" /> INACCESSIBLE (DRM_PROTECTED)</span>;
+      case 'BLOCKED':
+        return <span className="text-amber-500 font-mono text-[11px]">INACCESSIBLE (BLOCKED)</span>;
+      case 'REQUIRES_AUTHENTICATION':
+        return <span className="text-amber-300 font-mono text-[11px]">INACCESSIBLE (AUTH_REQUIRED)</span>;
       case 'UNREACHABLE':
-        return <span className="text-rose-400 font-mono text-[11px]">UNREACHABLE</span>;
+        return <span className="text-rose-400 font-mono text-[11px]">INACCESSIBLE (UNREACHABLE)</span>;
       default:
-        return <span className="text-slate-400 font-mono text-[11px]">DISCOVERED</span>;
+        return <span className="text-slate-400 font-mono text-[11px]">DISCOVERED (UNVERIFIED)</span>;
     }
   };
 
@@ -162,6 +194,15 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
           <RefreshCw className="w-4 h-4" />
         </button>
       </div>
+
+      {errorBanner && (
+        <div className="p-3 bg-rose-950/40 border border-rose-800/60 rounded text-rose-300 text-xs flex items-center justify-between">
+          <span>{errorBanner}</span>
+          <button onClick={() => setErrorBanner(null)} className="text-rose-400 hover:text-white">
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
 
       {/* Ad-hoc Quick Inspect Console */}
       <div className="p-4 rounded-lg bg-slate-900/50 border border-slate-800/80 space-y-3">
@@ -207,9 +248,9 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
       </div>
 
       {/* Filter and Search Bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded overflow-x-auto">
-          {['ALL', 'DISCOVERED', 'REACHABLE', 'MEDIA_DETECTED', 'ANALYZED', 'DRM_PROTECTED', 'UNREACHABLE'].map(s => (
+          {['ALL', 'DISCOVERED', 'REACHABLE', 'MEDIA_DETECTED', 'ACQUIRED', 'ANALYZED', 'DRM_PROTECTED', 'BLOCKED', 'UNREACHABLE'].map(s => (
             <button
               key={s}
               onClick={() => setFilterStatus(s)}
@@ -222,15 +263,28 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
           ))}
         </div>
 
-        <div className="relative w-full sm:w-64">
-          <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
-          <input
-            type="text"
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            placeholder="Search domain or URL..."
-            className="w-full pl-8 pr-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
-          />
+        <div className="flex flex-col sm:flex-row items-stretch sm:items-center gap-2">
+          <select
+            value={filterReferenceId}
+            onChange={(e) => setFilterReferenceId(e.target.value)}
+            className="px-2.5 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white focus:outline-none focus:border-cyan-400"
+          >
+            <option value="">All Reference Items</option>
+            {references.map(r => (
+              <option key={r.id} value={r.id}>{r.title}</option>
+            ))}
+          </select>
+
+          <div className="relative w-full sm:w-64">
+            <Search className="w-3.5 h-3.5 text-slate-500 absolute left-2.5 top-2.5" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search domain, title, or URL..."
+              className="w-full pl-8 pr-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
+            />
+          </div>
         </div>
       </div>
 
@@ -299,7 +353,7 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
                       <div className="text-[10px] text-slate-500">{cand.asset_kind || 'DISCOVERED_PAGE'}</div>
                     </td>
                     <td className="py-3 px-4">
-                      {getStatusBadge(cand.pipeline_status)}
+                      {getStatusBadge(cand)}
                       {cand.acquisition_status && cand.acquisition_status !== 'PENDING' && (
                         <div className="text-[10px] font-mono text-slate-400 mt-0.5">
                           {cand.acquisition_status}

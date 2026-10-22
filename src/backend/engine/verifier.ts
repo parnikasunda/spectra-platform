@@ -4,21 +4,22 @@
  *
  * Implements Stage C & Stage D:
  * DISCOVERED -> REACHABLE -> MEDIA_DETECTED -> ACQUIRED -> ANALYZED
- * Handles DRM protection (Widevine/PlayReady/FairPlay), HTTP errors, 
- * Cloudflare anti-bot blocks, HLS/DASH manifest probing, and video+audio perceptual matching.
+ * Handles DRM protection (Widevine/PlayReady/FairPlay), HTTP errors,
+ * Cloudflare anti-bot blocks, HLS/DASH manifest probing, and genuine perceptual frame matching.
+ *
+ * Never substitutes unrelated local sample videos or clones reference hashes to fabricate matches.
  */
 
 import fs from 'node:fs';
-import path from 'node:path';
 import { db } from '../db/database.js';
 import { FingerprintEngine } from './fingerprint.js';
-import { AdapterRegistry } from './adapters/index.js';
-import { 
-  CandidateItem, 
-  EvidenceRecord, 
-  FrameFingerprint, 
+import { AdapterRegistry, YouTubeAdapter } from './adapters/index.js';
+import {
+  CandidateItem,
+  EvidenceRecord,
+  FrameFingerprint,
   AudioFingerprint,
-  PipelineStatus 
+  PipelineStatus
 } from '../types.js';
 
 export class VerifierEngine {
@@ -44,7 +45,7 @@ export class VerifierEngine {
       logs.push(entry);
     };
 
-    log(`Initiating multi-source candidate acquisition & probe for: ${candidate.source_url}`);
+    log(`Initiating candidate reachability & content verification for: ${candidate.source_url}`);
 
     // Determine target reference ID
     const refId = options.targetReferenceId || candidate.reference_id;
@@ -57,39 +58,51 @@ export class VerifierEngine {
     const adapter = AdapterRegistry.getAdapterForUrl(candidate.source_url);
     log(`Dispatched to modular adapter: "${adapter.name}" (Category: ${adapter.sourceCategory})`);
 
-    const probeResult = await adapter.acquireAndProbe(candidate.source_url, { timeoutMs: 4000 });
+    const probeResult = await adapter.acquireAndProbe(candidate.source_url, { timeoutMs: 5000 });
 
     for (const l of probeResult.technicalLogs) {
       logs.push(l);
     }
 
     let pipelineStatus: PipelineStatus = probeResult.pipelineStatus;
-    let reachabilityCode = probeResult.httpStatus;
-    let latencyMs = probeResult.latencyMs;
-    let mediaType: any = probeResult.mediaType || candidate.media_type || 'UNKNOWN';
-    let mediaResolution = probeResult.resolution || candidate.media_resolution || '1920x1080';
-    let mediaDuration = probeResult.durationSec || candidate.media_duration_sec || 240;
-    let isLive = candidate.is_live_stream || mediaType === 'HLS_M3U8';
-    let rawHeaders: Record<string, string> = probeResult.headers || {};
-    let drmScheme: string | undefined = probeResult.drmScheme;
+    const reachabilityCode = probeResult.httpStatus;
+    const latencyMs = probeResult.latencyMs;
+    const mediaType: any = probeResult.mediaType || candidate.media_type || 'UNKNOWN';
+    const mediaResolution = probeResult.resolution || candidate.media_resolution;
+    const mediaDuration = probeResult.durationSec || candidate.media_duration_sec;
+    const isLive = candidate.is_live_stream || mediaType === 'HLS_M3U8';
+    const rawHeaders: Record<string, string> = probeResult.headers || {};
+    const drmScheme: string | undefined = probeResult.drmScheme;
+    const platformName = probeResult.platform || candidate.platform || candidate.domain;
 
     // Handle non-accessible states: DRM_PROTECTED, BLOCKED, REQUIRES_AUTHENTICATION, UNREACHABLE, UNSUPPORTED
     const isNonAcquirable = (
-      pipelineStatus === 'UNREACHABLE' || 
-      pipelineStatus === 'DRM_PROTECTED' || 
+      pipelineStatus === 'UNREACHABLE' ||
+      pipelineStatus === 'DRM_PROTECTED' ||
       pipelineStatus === 'BLOCKED' ||
       pipelineStatus === 'REQUIRES_AUTHENTICATION' ||
       pipelineStatus === 'UNSUPPORTED'
     );
 
     if (isNonAcquirable) {
-      log(`Acquisition boundary reached: Pipeline status "${pipelineStatus}". Media acquisition terminated.`);
+      log(`Verification result: Pipeline status "${pipelineStatus}" (HTTP ${reachabilityCode || 'ERR'}). Media stream not acquirable.`);
       if (pipelineStatus === 'DRM_PROTECTED') {
         log(`[Compliance Guarantee] DRM protection verified (${drmScheme || 'Widevine'}). Technical decryption without authorization is prohibited.`);
       }
 
+      const acqStatus =
+        pipelineStatus === 'DRM_PROTECTED'
+          ? 'INACCESSIBLE_DRM_PROTECTED'
+          : pipelineStatus === 'BLOCKED'
+          ? 'INACCESSIBLE_ANTI_BOT_BLOCKED'
+          : pipelineStatus === 'REQUIRES_AUTHENTICATION'
+          ? 'INACCESSIBLE_AUTH_REQUIRED'
+          : 'INACCESSIBLE_UNREACHABLE';
+
       db.updateCandidateVerification(candidate.id, {
         pipeline_status: pipelineStatus,
+        acquisition_status: acqStatus,
+        platform: platformName,
         reachability_code: reachabilityCode,
         reachability_latency_ms: latencyMs,
         media_type: mediaType,
@@ -108,121 +121,146 @@ export class VerifierEngine {
     }
 
     // -------------------------------------------------------------
-    // Step 2: Media Keyframe & Audio Perceptual Fingerprinting
+    // Step 2: Verify Page Content Plausible Relation to Target Reference
     // -------------------------------------------------------------
-    pipelineStatus = 'ACQUIRED';
-    log(`Acquiring media keyframes and computing perceptual hash matrix...`);
+    const verifiedTitle = probeResult.pageTitle || candidate.discovered_title;
+    if (reference) {
+      const relevance = YouTubeAdapter.computeRelevanceScore(
+        `${verifiedTitle} ${candidate.discovered_title}`,
+        reference.title,
+        reference.title
+      );
+      log(`Verified page title: "${verifiedTitle}" — Content relevance to reference "${reference.title}": ${(relevance * 100).toFixed(0)}%`);
+      log(`[Verification Policy] Title/snippet overlap alone is NOT proof of infringement. Perceptual frame comparison is required.`);
+    }
 
+    // If the candidate URL is merely a reachable HTML webpage or embedded player page
+    // without a decodable video stream, keep it as REACHABLE or MEDIA_DETECTED (unverified media).
+    if (pipelineStatus === 'REACHABLE' || (pipelineStatus === 'MEDIA_DETECTED' && !probeResult.resolvedMediaUrl && !candidate.file_path)) {
+      const acqStatus =
+        pipelineStatus === 'MEDIA_DETECTED'
+          ? 'ACCESSIBLE_UNVERIFIED_EMBED'
+          : 'ACCESSIBLE_WEB_PAGE_NO_STREAM';
+
+      log(`Candidate URL is accessible (HTTP ${reachabilityCode}), but no raw decodable video stream could be extracted. Status remains ${pipelineStatus} (${acqStatus}).`);
+
+      db.updateCandidateVerification(candidate.id, {
+        pipeline_status: pipelineStatus,
+        acquisition_status: acqStatus,
+        platform: platformName,
+        reachability_code: reachabilityCode,
+        reachability_latency_ms: latencyMs,
+        media_type: mediaType,
+        media_resolution: mediaResolution,
+        media_duration_sec: mediaDuration,
+        is_live_stream: isLive,
+        source_category: adapter.sourceCategory,
+        raw_headers_json: JSON.stringify(rawHeaders),
+        verification_logs: logs.join('\n'),
+        last_inspected_at: new Date().toISOString()
+      });
+
+      return {
+        candidate: db.getCandidateById(candidate.id)!,
+        evidenceRecord: null,
+        logs
+      };
+    }
+
+    // -------------------------------------------------------------
+    // Step 3: Genuine Media Keyframe Extraction via FFmpeg
+    // -------------------------------------------------------------
     let candidateFingerprints = db.getCandidateFingerprints(candidate.id);
 
     if (candidateFingerprints.length === 0) {
-      // Determine if this candidate is an infringing mirror/clip of the target reference
-      const isInfringingMirror = reference && (
-        candidate.discovered_title.toLowerCase().includes(reference.title.toLowerCase().slice(0, 8)) ||
-        candidate.source_url.toLowerCase().includes('stream') ||
-        candidate.source_url.toLowerCase().includes('mp4') ||
-        candidate.discovery_provider === 'SUSPECTED_PIRACY' ||
-        candidate.discovery_provider === 'ALL_SOURCES' ||
-        candidate.discovery_provider === 'PUBLIC_PLATFORMS'
-      ) && !candidate.discovered_title.toLowerCase().includes('pasta') && !candidate.discovered_title.toLowerCase().includes('culinary');
-
-      // Resolve actual candidate media: local file path, acquired media asset, or accessible stream URL
       let mediaSourceToExtract = probeResult.resolvedMediaUrl || candidate.source_url;
-      const mediaDir = path.resolve(process.cwd(), 'data', 'media');
-      
       if (candidate.file_path && fs.existsSync(candidate.file_path)) {
         mediaSourceToExtract = candidate.file_path;
-      } else if (!fs.existsSync(mediaSourceToExtract)) {
-        const lowerUrl = candidate.source_url.toLowerCase();
-        const lowerTitle = candidate.discovered_title.toLowerCase();
-        
-        if (lowerUrl.includes('youtube') && (lowerTitle.includes('patient zero') || lowerTitle.includes('taylor'))) {
-          const leakPath = path.join(mediaDir, 'taylor_swift_patient_zero_candidate_leak.mp4');
-          const ytPath = path.join(mediaDir, 'taylor_swift_youtube_leak.mp4');
-          if (fs.existsSync(leakPath)) mediaSourceToExtract = leakPath;
-          else if (fs.existsSync(ytPath)) mediaSourceToExtract = ytPath;
-        } else if (lowerUrl.includes('soap2day') || lowerTitle.includes('soap2day')) {
-          const soapPath = path.join(mediaDir, 'taylor_swift_soap2day_mirror.mp4');
-          if (fs.existsSync(soapPath)) mediaSourceToExtract = soapPath;
-        } else if (lowerTitle.includes('patient zero') || lowerUrl.includes('streamtape')) {
-          const leakPath = path.join(mediaDir, 'taylor_swift_patient_zero_candidate_leak.mp4');
-          if (fs.existsSync(leakPath)) mediaSourceToExtract = leakPath;
-        } else if (lowerTitle.includes('arsenal') || lowerTitle.includes('bayern') || lowerUrl.includes('live2all') || lowerTitle.includes('ucl')) {
-          const uclCand = path.join(mediaDir, 'arsenal_bayern_pirate_stream.mp4');
-          if (fs.existsSync(uclCand)) mediaSourceToExtract = uclCand;
-        } else if (lowerTitle.includes('apex') || lowerTitle.includes('horizon')) {
-          const leakPath = path.join(mediaDir, 'apex_horizon_candidate_leak.mp4');
-          const apexCand = path.join(mediaDir, 'apex_horizon_master.mp4');
-          if (fs.existsSync(leakPath)) mediaSourceToExtract = leakPath;
-          else if (fs.existsSync(apexCand)) mediaSourceToExtract = apexCand;
-        } else if (lowerTitle.includes('pasta') || lowerTitle.includes('culinary')) {
-          const culPath = path.join(mediaDir, 'culinary_public_sample.mp4');
-          if (fs.existsSync(culPath)) mediaSourceToExtract = culPath;
-        } else if (reference) {
-          if (reference.asset_type === 'LIVE_SPORTS') {
-            const uclCand = path.join(mediaDir, 'arsenal_bayern_pirate_stream.mp4');
-            if (fs.existsSync(uclCand)) mediaSourceToExtract = uclCand;
-          } else if (reference.title.toLowerCase().includes('apex')) {
-            const apexCand = path.join(mediaDir, 'apex_horizon_master.mp4');
-            if (fs.existsSync(apexCand)) mediaSourceToExtract = apexCand;
-          } else {
-            const tsCand = path.join(mediaDir, 'taylor_swift_patient_zero_candidate_leak.mp4');
-            if (fs.existsSync(tsCand)) mediaSourceToExtract = tsCand;
-          }
-        }
       }
+
+      log(`Attempting FFmpeg keyframe extraction from resolved source: ${mediaSourceToExtract}`);
 
       const extracted = await FingerprintEngine.extractVideoFingerprints(mediaSourceToExtract, {
         intervalSec: 2,
         maxFrames: 8,
         generateThumbnails: true,
-        title: candidate.discovered_title,
-        isCandidate: true,
-        baseOffsetSec: isInfringingMirror ? 12.0 : 0.0,
-        referenceFps: isInfringingMirror ? referenceFingerprints : undefined
+        title: verifiedTitle,
+        isCandidate: true
       });
 
-      candidateFingerprints = extracted.map(f => ({
-        id: `cfp_${Date.now()}_${Math.random().toString(36).substring(7)}`,
-        candidate_id: candidate.id,
-        timestamp_sec: f.timestamp_sec,
-        frame_index: f.frame_index,
-        phash_hex: f.phash_hex,
-        avg_luminance: f.avg_luminance,
-        thumbnail_data: f.thumbnail_data,
-        thumbnail_url: f.thumbnail_url || (f.thumbnail_data?.startsWith('/thumbnails/') ? f.thumbnail_data : undefined),
-        thumbnail_path: f.thumbnail_path,
-        created_at: new Date().toISOString()
-      }));
+      if (extracted.length > 0) {
+        candidateFingerprints = extracted.map(f => ({
+          id: `cfp_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+          candidate_id: candidate.id,
+          timestamp_sec: f.timestamp_sec,
+          frame_index: f.frame_index,
+          phash_hex: f.phash_hex,
+          avg_luminance: f.avg_luminance,
+          thumbnail_data: f.thumbnail_data,
+          thumbnail_url: f.thumbnail_url || (f.thumbnail_data?.startsWith('/thumbnails/') ? f.thumbnail_data : undefined),
+          thumbnail_path: f.thumbnail_path,
+          created_at: new Date().toISOString()
+        }));
 
-      db.insertCandidateFingerprints(candidateFingerprints);
-      log(`Extracted ${candidateFingerprints.length} keyframes with 64-bit dHash perceptual fingerprints.`);
+        db.insertCandidateFingerprints(candidateFingerprints);
+        log(`Decoded ${candidateFingerprints.length} genuine keyframes with 64-bit dHash perceptual fingerprints.`);
+      } else {
+        log(`No decodable video keyframes could be extracted from "${mediaSourceToExtract}". Candidate remains unverified (MEDIA_DETECTED).`);
+        db.updateCandidateVerification(candidate.id, {
+          pipeline_status: 'MEDIA_DETECTED',
+          acquisition_status: 'ACCESSIBLE_UNVERIFIED_MEDIA',
+          platform: platformName,
+          media_url: probeResult.resolvedMediaUrl,
+          reachability_code: reachabilityCode,
+          reachability_latency_ms: latencyMs,
+          media_type: mediaType,
+          media_resolution: mediaResolution,
+          media_duration_sec: mediaDuration,
+          is_live_stream: isLive,
+          source_category: adapter.sourceCategory,
+          raw_headers_json: JSON.stringify(rawHeaders),
+          verification_logs: logs.join('\n'),
+          last_inspected_at: new Date().toISOString()
+        });
+
+        return {
+          candidate: db.getCandidateById(candidate.id)!,
+          evidenceRecord: null,
+          logs
+        };
+      }
     } else {
-      log(`Loaded ${candidateFingerprints.length} pre-existing candidate keyframe fingerprints.`);
+      log(`Loaded ${candidateFingerprints.length} existing candidate keyframe fingerprints.`);
     }
 
-    // Audio Fingerprinting extraction for acquired candidate
-    log(`Inspecting audio stream track for acoustic fingerprint extraction...`);
-    const candidateAudioFps: AudioFingerprint[] = await FingerprintEngine.extractAudioFingerprints(
-      probeResult.resolvedMediaUrl || candidate.source_url,
-      { intervalSec: 2, maxDurationSec: 16 }
-    );
-    log(`Acoustic analysis: extracted ${candidateAudioFps.length} temporal audio energy hashes (8kHz mono sampling).`);
+    pipelineStatus = 'ACQUIRED';
 
     // -------------------------------------------------------------
-    // Step 3: Dual Video + Audio Temporal Sequence Matching
+    // Step 4: Perceptual Frame Comparison Against Registered Reference
     // -------------------------------------------------------------
     let evidence: EvidenceRecord | null = null;
+    let acqStatus = 'ACQUIRED_FRAMES_EXTRACTED';
 
-    if (reference && referenceFingerprints.length > 0) {
+    if (reference && reference.status === 'REGISTERED' && referenceFingerprints.length > 0) {
       pipelineStatus = 'ANALYZED';
-      log(`Running temporal sequence cross-correlation & audio alignment against "${reference.title}"...`);
+      log(`Running perceptual 64-bit dHash sequence comparison against registered reference "${reference.title}" (${referenceFingerprints.length} reference frames)...`);
 
-      // Extract or generate reference audio fingerprints
-      const referenceAudioFps = await FingerprintEngine.extractAudioFingerprints(
-        reference.file_path || reference.title,
-        { intervalSec: 2, maxDurationSec: 16 }
-      );
+      let candidateAudioFps: AudioFingerprint[] = [];
+      let referenceAudioFps: AudioFingerprint[] = [];
+
+      const candLocalFile = candidate.file_path && fs.existsSync(candidate.file_path) ? candidate.file_path : null;
+      const refLocalFile = reference.file_path && fs.existsSync(reference.file_path) ? reference.file_path : null;
+
+      if (candLocalFile && refLocalFile) {
+        candidateAudioFps = await FingerprintEngine.extractAudioFingerprints(candLocalFile, {
+          intervalSec: 2,
+          maxDurationSec: 16
+        });
+        referenceAudioFps = await FingerprintEngine.extractAudioFingerprints(refLocalFile, {
+          intervalSec: 2,
+          maxDurationSec: 16
+        });
+      }
 
       const comparison = FingerprintEngine.compareFingerprintSequences(
         candidateFingerprints,
@@ -230,12 +268,17 @@ export class VerifierEngine {
         {
           hammingThreshold: 12,
           minMatchedFrames: 2,
-          candidateAudioFps,
-          referenceAudioFps
+          candidateAudioFps: candidateAudioFps.length > 0 ? candidateAudioFps : undefined,
+          referenceAudioFps: referenceAudioFps.length > 0 ? referenceAudioFps : undefined
         }
       );
 
-      log(`Alignment results: Status=${comparison.matchStatus}, Classification=${comparison.matchClassification}, Confidence=${(comparison.confidenceScore * 100).toFixed(1)}%, MinDist=${comparison.minHammingDist} bits, AudioSim=${comparison.audioMatch?.audio_similarity_pct.toFixed(1)}%`);
+      const isMatch = comparison.matchStatus === 'POTENTIAL_MATCH';
+      acqStatus = isMatch ? 'VERIFIED_PERCEPTUAL_MATCH' : 'ANALYZED_NO_PERCEPTUAL_MATCH';
+
+      log(
+        `Perceptual comparison complete: Status=${comparison.matchStatus}, Classification=${comparison.matchClassification}, Confidence=${(comparison.confidenceScore * 100).toFixed(1)}%, MinHammingDist=${comparison.minHammingDist} bits (${comparison.matchedFramesCount}/${comparison.totalComparedFrames} frames aligned)`
+      );
 
       const custodySeal = FingerprintEngine.generateCustodySeal({
         candidateUrl: candidate.source_url,
@@ -272,11 +315,19 @@ export class VerifierEngine {
 
       db.insertEvidenceRecord(evidence);
       log(`Tamper-evident chain of custody seal generated: ${custodySeal.substring(0, 16)}...`);
+    } else if (reference && reference.status !== 'REGISTERED') {
+      log(`Target reference "${reference.title}" has status "${reference.status}" and 0 valid reference keyframes. Cannot confirm perceptual match until a valid reference video is uploaded.`);
+      acqStatus = 'ACQUIRED_AWAITING_VALID_REFERENCE';
+    } else {
+      log(`No target reference linked. Candidate keyframes extracted and stored (${acqStatus}).`);
     }
 
     // Update candidate state in SQLite
     db.updateCandidateVerification(candidate.id, {
       pipeline_status: pipelineStatus,
+      acquisition_status: acqStatus,
+      platform: platformName,
+      media_url: probeResult.resolvedMediaUrl,
       reachability_code: reachabilityCode,
       reachability_latency_ms: latencyMs,
       media_type: mediaType,

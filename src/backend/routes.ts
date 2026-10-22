@@ -72,9 +72,9 @@ const handleUpload = (req: Request, res: Response, next: NextFunction) => {
 
   upload.single('file')(req as any, res as any, (err: any) => {
     if (err) {
-      console.error('[Multer Error]', err);
+      console.warn('[Multer Notice]', err.message);
       res.setHeader('Content-Type', 'application/json');
-      return res.status(500).json({ error: err.message || 'File upload failed' });
+      return res.status(400).json({ error: err.message || 'File upload failed' });
     }
     if (!req.file) {
       upload.any()(req as any, res as any, (err2: any) => {
@@ -98,6 +98,7 @@ const handleUpload = (req: Request, res: Response, next: NextFunction) => {
 // -------------------------------------------------------------
 interface UploadSession {
   uploadId: string;
+  replaceReferenceId?: string;
   fileName: string;
   fileSize: number;
   totalChunks: number;
@@ -168,7 +169,8 @@ router.post('/uploads/init', (req: Request, res: Response) => {
       rightsHolder, 
       assetType, 
       sampleInterval, 
-      auditNotes 
+      auditNotes,
+      replaceReferenceId
     } = req.body || {};
 
     if (!fileName || typeof fileName !== 'string') {
@@ -202,6 +204,7 @@ router.post('/uploads/init', (req: Request, res: Response) => {
 
     const session: UploadSession = {
       uploadId,
+      replaceReferenceId: replaceReferenceId ? String(replaceReferenceId).trim() : undefined,
       fileName,
       fileSize,
       totalChunks,
@@ -226,7 +229,7 @@ router.post('/uploads/init', (req: Request, res: Response) => {
       maxUploadSizeBytes: maxSizeBytes
     });
   } catch (err: any) {
-    console.error('[Upload Init Error]', err);
+    console.warn('[Upload Init Notice]', err.message);
     return res.status(500).json({ error: err.message || 'Failed to initialize upload session' });
   }
 });
@@ -269,7 +272,7 @@ router.post('/uploads/chunk', chunkUpload.single('chunk') as any, (req: Request,
       totalChunks: session.totalChunks
     });
   } catch (err: any) {
-    console.error('[Upload Chunk Error]', err);
+    console.warn('[Upload Chunk Notice]', err.message);
     return res.status(500).json({ error: err.message || 'Failed to process chunk' });
   }
 });
@@ -340,7 +343,8 @@ router.post('/uploads/complete', async (req: Request, res: Response) => {
       stream.on('error', err => reject(err));
     });
 
-    const refId = `ref_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    const existingTarget = session.replaceReferenceId ? db.getReferenceById(session.replaceReferenceId) : undefined;
+    const refId = existingTarget ? existingTarget.id : `ref_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     const now = new Date().toISOString();
 
     // Probe media attributes
@@ -357,57 +361,78 @@ router.post('/uploads/complete', async (req: Request, res: Response) => {
       codec: probe.codec,
       source_type: 'UPLOAD',
       file_path: finalFilePath,
-      created_at: now,
+      created_at: existingTarget ? existingTarget.created_at : now,
       status: 'PROCESSING',
       provenance_sha256: provenanceHash,
       fingerprint_count: 0,
       notes: session.auditNotes
     };
 
-    // Extract real decoded keyframes and compute perceptual dHash fingerprints
-    const extractedFrames = await FingerprintEngine.extractVideoFingerprints(finalFilePath, {
-      intervalSec: session.sampleInterval,
-      maxFrames: 30,
-      generateThumbnails: true,
-      title: session.title,
-      isCandidate: false
-    });
+    try {
+      // Extract real decoded keyframes and compute perceptual dHash fingerprints
+      const extractedFrames = await FingerprintEngine.extractVideoFingerprints(finalFilePath, {
+        intervalSec: session.sampleInterval,
+        maxFrames: 30,
+        generateThumbnails: true,
+        title: session.title,
+        isCandidate: false
+      });
 
-    const fps: FrameFingerprint[] = extractedFrames.map((f, idx) => ({
-      id: `rfp_${refId}_${idx}`,
-      reference_id: refId,
-      timestamp_sec: f.timestamp_sec,
-      frame_index: f.frame_index,
-      phash_hex: f.phash_hex,
-      avg_luminance: f.avg_luminance,
-      thumbnail_data: f.thumbnail_data,
-      thumbnail_path: f.thumbnail_path,
-      thumbnail_url: f.thumbnail_url,
-      created_at: now
-    }));
+      const fps: FrameFingerprint[] = extractedFrames.map((f, idx) => ({
+        id: `rfp_${refId}_${idx}`,
+        reference_id: refId,
+        timestamp_sec: f.timestamp_sec,
+        frame_index: f.frame_index,
+        phash_hex: f.phash_hex,
+        avg_luminance: f.avg_luminance,
+        thumbnail_data: f.thumbnail_data,
+        thumbnail_path: f.thumbnail_path,
+        thumbnail_url: f.thumbnail_url,
+        created_at: now
+      }));
 
-    const firstThumbUrl = fps[0]?.thumbnail_url || fps[0]?.thumbnail_path || fps[0]?.thumbnail_data;
-    refItem.thumbnail_url = firstThumbUrl;
-    refItem.first_thumbnail = firstThumbUrl;
-    refItem.status = 'REGISTERED';
-    refItem.fingerprint_count = fps.length;
+      const firstThumbUrl = fps[0]?.thumbnail_url || fps[0]?.thumbnail_path || fps[0]?.thumbnail_data;
+      refItem.thumbnail_url = firstThumbUrl;
+      refItem.first_thumbnail = firstThumbUrl;
+      refItem.status = 'REGISTERED';
+      refItem.fingerprint_count = fps.length;
 
-    db.insertReference(refItem);
-    db.insertReferenceFingerprints(fps);
-    db.updateReferenceFingerprintCount(refId, fps.length, firstThumbUrl);
+      db.clearReferenceFingerprints(refId);
+      db.upsertReference(refItem);
+      db.insertReferenceFingerprints(fps);
+      db.updateReferenceFingerprintCount(refId, fps.length, firstThumbUrl);
 
-    // Clean up active session
-    activeUploadSessions.delete(uploadId);
+      activeUploadSessions.delete(uploadId);
 
-    const createdRef = db.getReferenceById(refId);
-    const savedFingerprints = db.getReferenceFingerprints(refId);
-    return res.status(201).json({
-      success: true,
-      data: createdRef ? { ...createdRef, fingerprints: savedFingerprints } : null,
-      fingerprintsExtracted: fps.length
-    });
+      const createdRef = db.getReferenceById(refId);
+      const savedFingerprints = db.getReferenceFingerprints(refId);
+      return res.status(201).json({
+        success: true,
+        data: createdRef ? { ...createdRef, fingerprints: savedFingerprints } : null,
+        fingerprintsExtracted: fps.length
+      });
+    } catch (extractErr: any) {
+      activeUploadSessions.delete(uploadId);
+      if (extractErr?.code === 'INVALID_TEST_PATTERN_SOURCE') {
+        refItem.status = 'INVALID';
+        refItem.thumbnail_url = undefined;
+        refItem.first_thumbnail = undefined;
+        refItem.fingerprint_count = 0;
+        refItem.notes = extractErr.message;
+        db.clearReferenceFingerprints(refId);
+        db.upsertReference(refItem);
+        const invalidRef = db.getReferenceById(refId);
+        return res.status(201).json({
+          success: true,
+          warning: extractErr.message,
+          data: invalidRef ? { ...invalidRef, fingerprints: [] } : null,
+          fingerprintsExtracted: 0
+        });
+      }
+      throw extractErr;
+    }
   } catch (err: any) {
-    console.error('[Upload Complete Error]', err);
+    console.warn('[Upload Complete Notice]', err.message);
     return res.status(500).json({ error: err.message || 'Failed to complete upload and process fingerprints' });
   }
 });
@@ -492,8 +517,11 @@ async function handleRegisterReference(req: Request, res: Response) {
       return res.status(400).json({ error: 'Rights holder is required for legal chain of custody' });
     }
 
+    const replaceReferenceId = req.body?.replaceReferenceId || req.body?.replace_reference_id;
+    const existingTarget = replaceReferenceId ? db.getReferenceById(String(replaceReferenceId).trim()) : undefined;
+
     const intervalSec = parseFloat(sampleInterval) || 2.0;
-    const refId = `ref_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+    const refId = existingTarget ? existingTarget.id : `ref_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     const now = new Date().toISOString();
 
     let filePath: string | undefined;
@@ -542,54 +570,75 @@ async function handleRegisterReference(req: Request, res: Response) {
       source_type: sourceType,
       source_url: effectiveSourceUrl,
       file_path: filePath,
-      created_at: now,
+      created_at: existingTarget ? existingTarget.created_at : now,
       status: 'PROCESSING',
       provenance_sha256: provenanceHash,
       fingerprint_count: 0,
       notes: auditNotes ? String(auditNotes) : undefined
     };
 
-    // Extract real decoded keyframes and generate 64-bit dHash perceptual hashes
-    const extractedFrames = await FingerprintEngine.extractVideoFingerprints(mediaTarget, {
-      intervalSec,
-      maxFrames: 30,
-      generateThumbnails: true,
-      title: String(title).trim(),
-      isCandidate: false
-    });
+    try {
+      // Extract real decoded keyframes and generate 64-bit dHash perceptual hashes
+      const extractedFrames = await FingerprintEngine.extractVideoFingerprints(mediaTarget, {
+        intervalSec,
+        maxFrames: 30,
+        generateThumbnails: true,
+        title: String(title).trim(),
+        isCandidate: false
+      });
 
-    const fps: FrameFingerprint[] = extractedFrames.map((f, idx) => ({
-      id: `rfp_${refId}_${idx}`,
-      reference_id: refId,
-      timestamp_sec: f.timestamp_sec,
-      frame_index: f.frame_index,
-      phash_hex: f.phash_hex,
-      avg_luminance: f.avg_luminance,
-      thumbnail_data: f.thumbnail_data,
-      thumbnail_path: f.thumbnail_path,
-      thumbnail_url: f.thumbnail_url,
-      created_at: now
-    }));
+      const fps: FrameFingerprint[] = extractedFrames.map((f, idx) => ({
+        id: `rfp_${refId}_${idx}`,
+        reference_id: refId,
+        timestamp_sec: f.timestamp_sec,
+        frame_index: f.frame_index,
+        phash_hex: f.phash_hex,
+        avg_luminance: f.avg_luminance,
+        thumbnail_data: f.thumbnail_data,
+        thumbnail_path: f.thumbnail_path,
+        thumbnail_url: f.thumbnail_url,
+        created_at: now
+      }));
 
-    const firstThumbUrl = fps[0]?.thumbnail_url || fps[0]?.thumbnail_path || fps[0]?.thumbnail_data;
-    refItem.thumbnail_url = firstThumbUrl;
-    refItem.first_thumbnail = firstThumbUrl;
-    refItem.status = 'REGISTERED';
-    refItem.fingerprint_count = fps.length;
+      const firstThumbUrl = fps[0]?.thumbnail_url || fps[0]?.thumbnail_path || fps[0]?.thumbnail_data;
+      refItem.thumbnail_url = firstThumbUrl;
+      refItem.first_thumbnail = firstThumbUrl;
+      refItem.status = 'REGISTERED';
+      refItem.fingerprint_count = fps.length;
 
-    db.insertReference(refItem);
-    db.insertReferenceFingerprints(fps);
-    db.updateReferenceFingerprintCount(refId, fps.length, firstThumbUrl);
+      db.clearReferenceFingerprints(refId);
+      db.upsertReference(refItem);
+      db.insertReferenceFingerprints(fps);
+      db.updateReferenceFingerprintCount(refId, fps.length, firstThumbUrl);
 
-    const createdRef = db.getReferenceById(refId);
-    const savedFingerprints = db.getReferenceFingerprints(refId);
-    return res.status(201).json({
-      success: true,
-      data: createdRef ? { ...createdRef, fingerprints: savedFingerprints } : null,
-      fingerprintsExtracted: fps.length
-    });
+      const createdRef = db.getReferenceById(refId);
+      const savedFingerprints = db.getReferenceFingerprints(refId);
+      return res.status(201).json({
+        success: true,
+        data: createdRef ? { ...createdRef, fingerprints: savedFingerprints } : null,
+        fingerprintsExtracted: fps.length
+      });
+    } catch (extractErr: any) {
+      if (extractErr?.code === 'INVALID_TEST_PATTERN_SOURCE') {
+        refItem.status = 'INVALID';
+        refItem.thumbnail_url = undefined;
+        refItem.first_thumbnail = undefined;
+        refItem.fingerprint_count = 0;
+        refItem.notes = extractErr.message;
+        db.clearReferenceFingerprints(refId);
+        db.upsertReference(refItem);
+        const invalidRef = db.getReferenceById(refId);
+        return res.status(201).json({
+          success: true,
+          warning: extractErr.message,
+          data: invalidRef ? { ...invalidRef, fingerprints: [] } : null,
+          fingerprintsExtracted: 0
+        });
+      }
+      throw extractErr;
+    }
   } catch (err: any) {
-    console.error('[Reference Registration Error]', err);
+    console.warn('[Reference Registration Notice]', err.message);
     res.setHeader('Content-Type', 'application/json');
     return res.status(500).json({
       error: err.message || 'Reference registration failed'

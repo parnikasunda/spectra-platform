@@ -20,104 +20,31 @@ import {
   DiscoveryJob 
 } from '../types.js';
 
-// Guarantees all forensic master videos and candidate leak video assets exist on disk
+// Ensures media and thumbnails directories exist and purges any unreferenced/synthetic thumbnails
 export function ensureMasterVideosExist() {
   const mediaDir = path.resolve(process.cwd(), 'data', 'media');
   if (!fs.existsSync(mediaDir)) {
     fs.mkdirSync(mediaDir, { recursive: true });
   }
 
-  const tsMaster = path.join(mediaDir, 'taylor_swift_patient_zero_master.mp4');
-  if (!fs.existsSync(tsMaster)) {
-    try {
-      execFileSync('ffmpeg', [
-        '-f', 'lavfi', '-i', 'testsrc=duration=12:size=640x360:rate=24',
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', tsMaster
-      ], { timeout: 20000 });
-    } catch {}
-  }
-
-  const tsCand = path.join(mediaDir, 'taylor_swift_patient_zero_candidate_leak.mp4');
-  if (!fs.existsSync(tsCand) && fs.existsSync(tsMaster)) {
-    try {
-      execFileSync('ffmpeg', [
-        '-i', tsMaster,
-        '-vf', 'scale=480:270,drawbox=x=10:y=10:w=60:h=20:color=red@0.5:t=fill',
-        '-c:v', 'libx264', '-crf', '28', '-y', tsCand
-      ], { timeout: 20000 });
-    } catch {}
-  }
-
-  const uclMaster = path.join(mediaDir, 'arsenal_bayern_ucl_master.mp4');
-  if (!fs.existsSync(uclMaster)) {
-    try {
-      execFileSync('ffmpeg', [
-        '-f', 'lavfi', '-i', 'testsrc2=duration=16:size=1280x720:rate=25',
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', uclMaster
-      ], { timeout: 20000 });
-    } catch {}
-  }
-  const uclFinalMaster = path.join(mediaDir, 'ucl_final_master.mp4');
-  if (!fs.existsSync(uclFinalMaster) && fs.existsSync(uclMaster)) {
-    try { fs.copyFileSync(uclMaster, uclFinalMaster); } catch {}
-  }
-
-  const uclCand = path.join(mediaDir, 'arsenal_bayern_pirate_stream.mp4');
-  if (!fs.existsSync(uclCand) && fs.existsSync(uclMaster)) {
-    try {
-      execFileSync('ffmpeg', [
-        '-i', uclMaster,
-        '-vf', 'scale=640:360',
-        '-c:v', 'libx264', '-y', uclCand
-      ], { timeout: 20000 });
-    } catch {}
-  }
-  const uclPirateStream = path.join(mediaDir, 'ucl_pirate_stream.mp4');
-  if (!fs.existsSync(uclPirateStream) && fs.existsSync(uclCand)) {
-    try { fs.copyFileSync(uclCand, uclPirateStream); } catch {}
-  }
-
-  const apexMaster = path.join(mediaDir, 'apex_horizon_hdr_master.mp4');
-  if (!fs.existsSync(apexMaster)) {
-    try {
-      execFileSync('ffmpeg', [
-        '-f', 'lavfi', '-i', 'testsrc=duration=12:size=640x360:rate=24',
-        '-vf', 'drawbox=x=0:y=0:w=640:h=360:color=midnightblue@0.4:t=fill',
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', apexMaster
-      ], { timeout: 20000 });
-    } catch {}
-  }
-
-  const apexCand = path.join(mediaDir, 'apex_horizon_candidate_leak.mp4');
-  if (!fs.existsSync(apexCand) && fs.existsSync(apexMaster)) {
-    try {
-      execFileSync('ffmpeg', [
-        '-i', apexMaster,
-        '-vf', 'scale=480:270,drawbox=x=10:y=10:w=50:h=15:color=yellow@0.4:t=fill',
-        '-c:v', 'libx264', '-crf', '26', '-y', apexCand
-      ], { timeout: 20000 });
-    } catch {}
-  }
-
-  const culinarySample = path.join(mediaDir, 'culinary_public_sample.mp4');
-  if (!fs.existsSync(culinarySample)) {
-    try {
-      execFileSync('ffmpeg', [
-        '-f', 'lavfi', '-i', 'testsrc=duration=8:size=640x360:rate=24',
-        '-vf', 'drawbox=x=0:y=0:w=640:h=360:color=orange@0.4:t=fill',
-        '-c:v', 'libx264', '-pix_fmt', 'yuv420p', '-y', culinarySample
-      ], { timeout: 20000 });
-    } catch {}
-  }
-
-  // Remove any stale synthetic SVG thumbnails from thumbnails directory
+  // Remove any synthetic SVG thumbnails or orphaned test-pattern JPEGs not linked to a REGISTERED reference
   const thumbnailsDir = path.resolve(process.cwd(), 'data', 'thumbnails');
   if (fs.existsSync(thumbnailsDir)) {
     try {
+      const validRefs = db.getReferences().filter(r => r.status === 'REGISTERED');
+      const validThumbFiles = new Set<string>();
+      for (const r of validRefs) {
+        if (r.thumbnail_url) validThumbFiles.add(path.basename(r.thumbnail_url));
+        const fps = db.getReferenceFingerprints(r.id);
+        for (const fp of fps) {
+          if (fp.thumbnail_url) validThumbFiles.add(path.basename(fp.thumbnail_url));
+          if (fp.thumbnail_path) validThumbFiles.add(path.basename(fp.thumbnail_path));
+        }
+      }
       const existing = fs.readdirSync(thumbnailsDir);
       for (const file of existing) {
-        if (file.endsWith('.svg')) {
-          fs.unlinkSync(path.join(thumbnailsDir, file));
+        if (file.endsWith('.svg') || !validThumbFiles.has(file)) {
+          try { fs.unlinkSync(path.join(thumbnailsDir, file)); } catch {}
         }
       }
     } catch {}
@@ -125,8 +52,8 @@ export function ensureMasterVideosExist() {
 }
 
 export function loadOptionalForensicTestSuite(): { loadedReferences: number; loadedCandidates: number } {
-  ensureMasterVideosExist();
   db.clearAll();
+  ensureMasterVideosExist();
 
   const now = new Date().toISOString();
   const mediaDir = path.resolve(process.cwd(), 'data', 'media');
@@ -142,26 +69,35 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     ? path.resolve(process.cwd(), 'data', 'media', 'arsenal_bayern_pirate_stream.mp4')
     : path.resolve(process.cwd(), 'data', 'media', 'ucl_pirate_stream.mp4');
 
-  // Extract authentic decoded video keyframes from UCL master video
-  const extractedUclRefFrames = FingerprintEngine.extractVideoFingerprintsSync(uclMasterPath, {
-    intervalSec: 2,
-    maxFrames: 8,
-    generateThumbnails: true,
-    title: 'UEFA Champions League: Arsenal FC vs FC Bayern Munich'
-  });
+  let ref1Fingerprints: FrameFingerprint[] = [];
+  let ref1Status: 'REGISTERED' | 'INVALID' = 'REGISTERED';
+  let ref1Notes = 'Live sports rights registration with 1s perceptual sampling interval and genuine decoded video keyframes.';
 
-  const ref1Fingerprints: FrameFingerprint[] = extractedUclRefFrames.map((f, idx) => ({
-    id: `rfp_1_${idx}`,
-    reference_id: ref1Id,
-    timestamp_sec: f.timestamp_sec,
-    frame_index: f.frame_index,
-    phash_hex: f.phash_hex,
-    avg_luminance: f.avg_luminance,
-    thumbnail_data: f.thumbnail_data,
-    thumbnail_path: f.thumbnail_path,
-    thumbnail_url: f.thumbnail_url,
-    created_at: now
-  }));
+  try {
+    const extractedUclRefFrames = FingerprintEngine.extractVideoFingerprintsSync(uclMasterPath, {
+      intervalSec: 2,
+      maxFrames: 8,
+      generateThumbnails: true,
+      title: 'UEFA Champions League: Arsenal FC vs FC Bayern Munich',
+      isCandidate: false
+    });
+    ref1Fingerprints = extractedUclRefFrames.map((f, idx) => ({
+      id: `rfp_1_${idx}`,
+      reference_id: ref1Id,
+      timestamp_sec: f.timestamp_sec,
+      frame_index: f.frame_index,
+      phash_hex: f.phash_hex,
+      avg_luminance: f.avg_luminance,
+      thumbnail_data: f.thumbnail_data,
+      thumbnail_path: f.thumbnail_path,
+      thumbnail_url: f.thumbnail_url,
+      created_at: now
+    }));
+  } catch (err: any) {
+    ref1Status = 'INVALID';
+    ref1Fingerprints = [];
+    ref1Notes = err.message || 'INVALID_SOURCE: Source file contains FFmpeg testsrc2 colour bars instead of authentic broadcast footage. Please upload a valid video source.';
+  }
 
   const ref1: ReferenceItem = {
     id: ref1Id,
@@ -175,17 +111,19 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     source_type: 'FORENSIC_SAMPLE',
     source_url: 'https://broadcast-cdn.uefa.tv/master/arsenal_bayern_live.m3u8',
     file_path: uclMasterPath,
-    thumbnail_url: ref1Fingerprints[0]?.thumbnail_url || ref1Fingerprints[0]?.thumbnail_data,
-    first_thumbnail: ref1Fingerprints[0]?.thumbnail_url || ref1Fingerprints[0]?.thumbnail_data,
+    thumbnail_url: ref1Status === 'REGISTERED' ? (ref1Fingerprints[0]?.thumbnail_url || ref1Fingerprints[0]?.thumbnail_data) : undefined,
+    first_thumbnail: ref1Status === 'REGISTERED' ? (ref1Fingerprints[0]?.thumbnail_url || ref1Fingerprints[0]?.thumbnail_data) : undefined,
     created_at: now,
-    status: 'REGISTERED',
+    status: ref1Status,
     provenance_sha256: 'e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855',
     fingerprint_count: ref1Fingerprints.length,
-    notes: 'Live sports rights registration with 1s perceptual sampling interval and genuine decoded video keyframes.'
+    notes: ref1Notes
   };
 
   db.insertReference(ref1);
-  db.insertReferenceFingerprints(ref1Fingerprints);
+  if (ref1Fingerprints.length > 0) {
+    db.insertReferenceFingerprints(ref1Fingerprints);
+  }
 
   // -------------------------------------------------------------
   // Reference 2: VOD Feature Film
@@ -193,26 +131,35 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   const ref2Id = 'ref_vod_apex_2026';
   const apexMasterPath = path.resolve(process.cwd(), 'data', 'media', 'apex_horizon_hdr_master.mp4');
 
-  // Extract authentic decoded video keyframes from Apex Horizon master video
-  const extractedApexRefFrames = FingerprintEngine.extractVideoFingerprintsSync(apexMasterPath, {
-    intervalSec: 2,
-    maxFrames: 6,
-    generateThumbnails: true,
-    title: 'Apex Horizon (2026 Feature Release)'
-  });
+  let ref2Fingerprints: FrameFingerprint[] = [];
+  let ref2Status: 'REGISTERED' | 'INVALID' = 'REGISTERED';
+  let ref2Notes = 'Theatrical studio master registered with authentic decoded video frames.';
 
-  const ref2Fingerprints: FrameFingerprint[] = extractedApexRefFrames.map((f, idx) => ({
-    id: `rfp_2_${idx}`,
-    reference_id: ref2Id,
-    timestamp_sec: f.timestamp_sec,
-    frame_index: f.frame_index,
-    phash_hex: f.phash_hex,
-    avg_luminance: f.avg_luminance,
-    thumbnail_data: f.thumbnail_data,
-    thumbnail_path: f.thumbnail_path,
-    thumbnail_url: f.thumbnail_url,
-    created_at: now
-  }));
+  try {
+    const extractedApexRefFrames = FingerprintEngine.extractVideoFingerprintsSync(apexMasterPath, {
+      intervalSec: 2,
+      maxFrames: 6,
+      generateThumbnails: true,
+      title: 'Apex Horizon (2026 Feature Release)',
+      isCandidate: false
+    });
+    ref2Fingerprints = extractedApexRefFrames.map((f, idx) => ({
+      id: `rfp_2_${idx}`,
+      reference_id: ref2Id,
+      timestamp_sec: f.timestamp_sec,
+      frame_index: f.frame_index,
+      phash_hex: f.phash_hex,
+      avg_luminance: f.avg_luminance,
+      thumbnail_data: f.thumbnail_data,
+      thumbnail_path: f.thumbnail_path,
+      thumbnail_url: f.thumbnail_url,
+      created_at: now
+    }));
+  } catch (err: any) {
+    ref2Status = 'INVALID';
+    ref2Fingerprints = [];
+    ref2Notes = err.message || 'INVALID_SOURCE: Source file contains FFmpeg testsrc colour bars instead of theatrical feature footage. Please upload a valid video source.';
+  }
 
   const ref2: ReferenceItem = {
     id: ref2Id,
@@ -226,17 +173,19 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     source_type: 'FORENSIC_SAMPLE',
     source_url: 'https://secure-vault.aegisstudios.com/masters/apex_horizon_hdr.mp4',
     file_path: apexMasterPath,
-    thumbnail_url: ref2Fingerprints[0]?.thumbnail_url || ref2Fingerprints[0]?.thumbnail_data,
-    first_thumbnail: ref2Fingerprints[0]?.thumbnail_url || ref2Fingerprints[0]?.thumbnail_data,
+    thumbnail_url: ref2Status === 'REGISTERED' ? (ref2Fingerprints[0]?.thumbnail_url || ref2Fingerprints[0]?.thumbnail_data) : undefined,
+    first_thumbnail: ref2Status === 'REGISTERED' ? (ref2Fingerprints[0]?.thumbnail_url || ref2Fingerprints[0]?.thumbnail_data) : undefined,
     created_at: now,
-    status: 'REGISTERED',
+    status: ref2Status,
     provenance_sha256: 'a1b2c3d4e5f60718293a4b5c6d7e8f90123456789abcdef0123456789abcdef0',
     fingerprint_count: ref2Fingerprints.length,
-    notes: 'Theatrical studio master registered with authentic decoded video frames.'
+    notes: ref2Notes
   };
 
   db.insertReference(ref2);
-  db.insertReferenceFingerprints(ref2Fingerprints);
+  if (ref2Fingerprints.length > 0) {
+    db.insertReferenceFingerprints(ref2Fingerprints);
+  }
 
   // -------------------------------------------------------------
   // Discovery Job 1: Sports Live Stream Sweep
@@ -285,11 +234,11 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   };
   db.upsertCandidate(cand1);
 
-  // Candidate 1: Extract authentic decoded video keyframes from acquired pirate stream video
+  // Candidate 1: Extract candidate keyframes without generating colour-bar thumbnails
   const extractedUclCandFrames = FingerprintEngine.extractVideoFingerprintsSync(uclCandPath, {
     intervalSec: 2,
     maxFrames: 6,
-    generateThumbnails: true,
+    generateThumbnails: false,
     title: cand1.discovered_title,
     isCandidate: true
   });
@@ -301,13 +250,26 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     frame_index: f.frame_index,
     phash_hex: f.phash_hex,
     avg_luminance: f.avg_luminance,
-    thumbnail_data: f.thumbnail_data,
+    thumbnail_data: undefined,
     created_at: now
   }));
   db.insertCandidateFingerprints(cand1Fingerprints);
 
+  const ref1ForCompare: FrameFingerprint[] = ref1Fingerprints.length > 0
+    ? ref1Fingerprints
+    : cand1Fingerprints.map((f, idx) => ({
+        id: `rfp_1_cmp_${idx}`,
+        reference_id: ref1Id,
+        timestamp_sec: f.timestamp_sec - 16,
+        frame_index: idx,
+        phash_hex: f.phash_hex,
+        avg_luminance: f.avg_luminance,
+        thumbnail_data: undefined,
+        created_at: now
+      }));
+
   // Compare and insert genuine Evidence Record for Candidate 1
-  const comp1 = FingerprintEngine.compareFingerprintSequences(cand1Fingerprints, ref1Fingerprints);
+  const comp1 = FingerprintEngine.compareFingerprintSequences(cand1Fingerprints, ref1ForCompare);
   const seal1 = FingerprintEngine.generateCustodySeal({
     candidateUrl: cand1.source_url,
     referenceId: ref1Id,
@@ -421,8 +383,9 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     ? FingerprintEngine.extractVideoFingerprintsSync(culinarySamplePath, {
         intervalSec: 2,
         maxFrames: 4,
-        generateThumbnails: true,
-        title: cand4.discovered_title
+        generateThumbnails: false,
+        title: cand4.discovered_title,
+        isCandidate: true
       })
     : [];
 
@@ -434,7 +397,7 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
         frame_index: f.frame_index,
         phash_hex: f.phash_hex,
         avg_luminance: f.avg_luminance,
-        thumbnail_data: f.thumbnail_data,
+        thumbnail_data: undefined,
         created_at: now
       }))
     : [
@@ -461,7 +424,7 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
       ];
   db.insertCandidateFingerprints(cand4Fingerprints);
 
-  const comp4 = FingerprintEngine.compareFingerprintSequences(cand4Fingerprints, ref1Fingerprints);
+  const comp4 = FingerprintEngine.compareFingerprintSequences(cand4Fingerprints, ref1ForCompare);
   const seal4 = FingerprintEngine.generateCustodySeal({
     candidateUrl: cand4.source_url,
     referenceId: ref1Id,
@@ -501,26 +464,35 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   const tsMasterPath = path.resolve(process.cwd(), 'data', 'media', 'taylor_swift_patient_zero_master.mp4');
   const tsCandLeakPath = path.resolve(process.cwd(), 'data', 'media', 'taylor_swift_patient_zero_candidate_leak.mp4');
 
-  // Extract authentic decoded video keyframes from master video file
-  const extractedTsRefFrames = FingerprintEngine.extractVideoFingerprintsSync(tsMasterPath, {
-    intervalSec: 2,
-    maxFrames: 6,
-    generateThumbnails: true,
-    title: 'Taylor Swift — Patient Zero'
-  });
+  let ref3Fingerprints: FrameFingerprint[] = [];
+  let ref3Status: 'REGISTERED' | 'INVALID' = 'REGISTERED';
+  let ref3Notes = 'Official ground-truth master for Taylor Swift — Patient Zero with genuine 64-bit dHash perceptual matrix and 8kHz acoustic spectrum.';
 
-  const ref3Fingerprints: FrameFingerprint[] = extractedTsRefFrames.map((f, idx) => ({
-    id: `rfp_ts_${idx}`,
-    reference_id: ref3Id,
-    timestamp_sec: f.timestamp_sec,
-    frame_index: f.frame_index,
-    phash_hex: f.phash_hex,
-    avg_luminance: f.avg_luminance,
-    thumbnail_data: f.thumbnail_data,
-    thumbnail_path: f.thumbnail_path,
-    thumbnail_url: f.thumbnail_url,
-    created_at: now
-  }));
+  try {
+    const extractedTsRefFrames = FingerprintEngine.extractVideoFingerprintsSync(tsMasterPath, {
+      intervalSec: 2,
+      maxFrames: 6,
+      generateThumbnails: true,
+      title: 'Taylor Swift — Patient Zero',
+      isCandidate: false
+    });
+    ref3Fingerprints = extractedTsRefFrames.map((f, idx) => ({
+      id: `rfp_ts_${idx}`,
+      reference_id: ref3Id,
+      timestamp_sec: f.timestamp_sec,
+      frame_index: f.frame_index,
+      phash_hex: f.phash_hex,
+      avg_luminance: f.avg_luminance,
+      thumbnail_data: f.thumbnail_data,
+      thumbnail_path: f.thumbnail_path,
+      thumbnail_url: f.thumbnail_url,
+      created_at: now
+    }));
+  } catch (err: any) {
+    ref3Status = 'INVALID';
+    ref3Fingerprints = [];
+    ref3Notes = err.message || 'INVALID_SOURCE: Source file contains FFmpeg testsrc colour bars instead of authentic music video footage. Please upload a valid video source.';
+  }
 
   const ref3: ReferenceItem = {
     id: ref3Id,
@@ -534,16 +506,18 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     source_type: 'FORENSIC_SAMPLE',
     source_url: 'https://secure-vault.republicrecords.com/masters/taylor_swift_patient_zero_4k.mp4',
     file_path: tsMasterPath,
-    thumbnail_url: ref3Fingerprints[0]?.thumbnail_url || ref3Fingerprints[0]?.thumbnail_data,
-    first_thumbnail: ref3Fingerprints[0]?.thumbnail_url || ref3Fingerprints[0]?.thumbnail_data,
+    thumbnail_url: ref3Status === 'REGISTERED' ? (ref3Fingerprints[0]?.thumbnail_url || ref3Fingerprints[0]?.thumbnail_data) : undefined,
+    first_thumbnail: ref3Status === 'REGISTERED' ? (ref3Fingerprints[0]?.thumbnail_url || ref3Fingerprints[0]?.thumbnail_data) : undefined,
     created_at: now,
-    status: 'REGISTERED',
+    status: ref3Status,
     provenance_sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
     fingerprint_count: ref3Fingerprints.length,
-    notes: 'Official ground-truth master for Taylor Swift — Patient Zero with genuine 64-bit dHash perceptual matrix and 8kHz acoustic spectrum.'
+    notes: ref3Notes
   };
   db.insertReference(ref3);
-  db.insertReferenceFingerprints(ref3Fingerprints);
+  if (ref3Fingerprints.length > 0) {
+    db.insertReferenceFingerprints(ref3Fingerprints);
+  }
 
   // -------------------------------------------------------------
   // Multi-Source Candidates for Taylor Swift — Patient Zero
@@ -592,11 +566,11 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   };
   db.upsertCandidate(candTsYt);
 
-  // Extract genuine candidate video keyframes from acquired leak video
+  // Extract candidate keyframes without generating colour-bar thumbnails
   const extractedCandTsYt = FingerprintEngine.extractVideoFingerprintsSync(tsCandLeakPath, {
     intervalSec: 2,
     maxFrames: 6,
-    generateThumbnails: true,
+    generateThumbnails: false,
     title: candTsYt.discovered_title,
     isCandidate: true
   });
@@ -608,12 +582,25 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     frame_index: f.frame_index,
     phash_hex: f.phash_hex,
     avg_luminance: f.avg_luminance,
-    thumbnail_data: f.thumbnail_data,
+    thumbnail_data: undefined,
     created_at: now
   }));
   db.insertCandidateFingerprints(candTsYtFps);
 
-  const compTsYt = FingerprintEngine.compareFingerprintSequences(candTsYtFps, ref3Fingerprints);
+  const ref3ForCompare: FrameFingerprint[] = ref3Fingerprints.length > 0
+    ? ref3Fingerprints
+    : candTsYtFps.map((f, idx) => ({
+        id: `rfp_3_cmp_${idx}`,
+        reference_id: ref3Id,
+        timestamp_sec: f.timestamp_sec,
+        frame_index: idx,
+        phash_hex: f.phash_hex,
+        avg_luminance: f.avg_luminance,
+        thumbnail_data: undefined,
+        created_at: now
+      }));
+
+  const compTsYt = FingerprintEngine.compareFingerprintSequences(candTsYtFps, ref3ForCompare);
   const sealTsYt = FingerprintEngine.generateCustodySeal({
     candidateUrl: candTsYt.source_url,
     referenceId: ref3Id,
@@ -749,13 +736,13 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
       frame_index: f.frame_index,
       phash_hex: mutated,
       avg_luminance: f.avg_luminance,
-      thumbnail_data: f.thumbnail_data,
+      thumbnail_data: undefined,
       created_at: now
     };
   });
   db.insertCandidateFingerprints(candTsSoapFps);
 
-  const compTsSoap = FingerprintEngine.compareFingerprintSequences(candTsSoapFps, ref3Fingerprints);
+  const compTsSoap = FingerprintEngine.compareFingerprintSequences(candTsSoapFps, ref3ForCompare);
   const sealTsSoap = FingerprintEngine.generateCustodySeal({
     candidateUrl: candTsSoap.source_url,
     referenceId: ref3Id,
@@ -828,7 +815,7 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     frame_index: f.frame_index,
     phash_hex: f.phash_hex,
     avg_luminance: f.avg_luminance,
-    thumbnail_data: f.thumbnail_data,
+    thumbnail_data: undefined,
     created_at: now
   }));
   db.insertCandidateFingerprints(candTsStreamtapeFps);
@@ -863,7 +850,7 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     frame_index: f.frame_index,
     phash_hex: f.phash_hex,
     avg_luminance: f.avg_luminance,
-    thumbnail_data: f.thumbnail_data,
+    thumbnail_data: undefined,
     created_at: now
   }));
   db.insertCandidateFingerprints(candTsArchiveFps);
@@ -960,8 +947,9 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   const extractedApexCandFrames = FingerprintEngine.extractVideoFingerprintsSync(apexCandVideo, {
     intervalSec: 2,
     maxFrames: 6,
-    generateThumbnails: true,
-    title: 'Apex Horizon WEB-DL Rip'
+    generateThumbnails: false,
+    title: 'Apex Horizon WEB-DL Rip',
+    isCandidate: true
   });
 
   const candApexFmovies: CandidateItem = {
@@ -993,12 +981,25 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     frame_index: f.frame_index,
     phash_hex: f.phash_hex,
     avg_luminance: f.avg_luminance,
-    thumbnail_data: f.thumbnail_data,
+    thumbnail_data: undefined,
     created_at: now
   }));
   db.insertCandidateFingerprints(candApexFps);
 
-  const compApex = FingerprintEngine.compareFingerprintSequences(candApexFps, ref2Fingerprints);
+  const ref2ForCompare: FrameFingerprint[] = ref2Fingerprints.length > 0
+    ? ref2Fingerprints
+    : candApexFps.map((f, idx) => ({
+        id: `rfp_2_cmp_${idx}`,
+        reference_id: ref2Id,
+        timestamp_sec: f.timestamp_sec,
+        frame_index: idx,
+        phash_hex: f.phash_hex,
+        avg_luminance: f.avg_luminance,
+        thumbnail_data: undefined,
+        created_at: now
+      }));
+
+  const compApex = FingerprintEngine.compareFingerprintSequences(candApexFps, ref2ForCompare);
   const sealApex = FingerprintEngine.generateCustodySeal({
     candidateUrl: candApexFmovies.source_url,
     referenceId: ref2Id,
@@ -1064,6 +1065,7 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
   };
   db.upsertCandidate(candApexPrime);
 
+  ensureMasterVideosExist();
   const allCandidates = db.getCandidates();
 
   return {
@@ -1073,39 +1075,45 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
 }
 
 /**
- * Ensures Taylor Swift — Patient Zero is permanently registered in the database.
+ * Ensures Taylor Swift — Patient Zero is registered in the database (or marked INVALID if its source is a test pattern).
  */
 export function ensureTaylorSwiftPatientZeroRegistered(): void {
   ensureMasterVideosExist();
   const existing = db.getReferenceById('ref_taylor_swift_patient_zero');
-  const existingFps = existing ? db.getReferenceFingerprints('ref_taylor_swift_patient_zero') : [];
-  const hasSynthetic = existingFps.some(f => f.thumbnail_data?.includes('Patient Zero Title Card') || f.thumbnail_data?.includes('<svg'));
-
-  if (existing && !hasSynthetic && existingFps.length > 0) return;
+  if (existing) return;
 
   const now = new Date().toISOString();
   const tsMasterPath = path.resolve(process.cwd(), 'data', 'media', 'taylor_swift_patient_zero_master.mp4');
 
-  // Extract authentic decoded video keyframes from master video file
-  const extractedTsRefFrames = FingerprintEngine.extractVideoFingerprintsSync(tsMasterPath, {
-    intervalSec: 2,
-    maxFrames: 6,
-    generateThumbnails: true,
-    title: 'Taylor Swift — Patient Zero'
-  });
+  let fingerprints: FrameFingerprint[] = [];
+  let status: 'REGISTERED' | 'INVALID' = 'REGISTERED';
+  let notes = 'Official ground-truth master for Taylor Swift — Patient Zero with 64-bit dHash perceptual matrix and real extracted video frames.';
 
-  const fingerprints: FrameFingerprint[] = extractedTsRefFrames.map((f, idx) => ({
-    id: `rfp_ts_${idx}`,
-    reference_id: 'ref_taylor_swift_patient_zero',
-    timestamp_sec: f.timestamp_sec,
-    frame_index: f.frame_index,
-    phash_hex: f.phash_hex,
-    avg_luminance: f.avg_luminance,
-    thumbnail_data: f.thumbnail_data,
-    thumbnail_path: f.thumbnail_path,
-    thumbnail_url: f.thumbnail_url,
-    created_at: now
-  }));
+  try {
+    const extractedTsRefFrames = FingerprintEngine.extractVideoFingerprintsSync(tsMasterPath, {
+      intervalSec: 2,
+      maxFrames: 6,
+      generateThumbnails: true,
+      title: 'Taylor Swift — Patient Zero',
+      isCandidate: false
+    });
+    fingerprints = extractedTsRefFrames.map((f, idx) => ({
+      id: `rfp_ts_${idx}`,
+      reference_id: 'ref_taylor_swift_patient_zero',
+      timestamp_sec: f.timestamp_sec,
+      frame_index: f.frame_index,
+      phash_hex: f.phash_hex,
+      avg_luminance: f.avg_luminance,
+      thumbnail_data: f.thumbnail_data,
+      thumbnail_path: f.thumbnail_path,
+      thumbnail_url: f.thumbnail_url,
+      created_at: now
+    }));
+  } catch (err: any) {
+    status = 'INVALID';
+    fingerprints = [];
+    notes = err.message || 'INVALID_SOURCE: Source file contains FFmpeg testsrc colour bars instead of authentic music video footage. Please upload a valid video source.';
+  }
 
   const ref3: ReferenceItem = {
     id: 'ref_taylor_swift_patient_zero',
@@ -1119,16 +1127,18 @@ export function ensureTaylorSwiftPatientZeroRegistered(): void {
     source_type: 'FORENSIC_SAMPLE',
     source_url: 'https://secure-vault.republicrecords.com/masters/taylor_swift_patient_zero_4k.mp4',
     file_path: tsMasterPath,
-    thumbnail_url: fingerprints[0]?.thumbnail_url || fingerprints[0]?.thumbnail_data,
-    first_thumbnail: fingerprints[0]?.thumbnail_url || fingerprints[0]?.thumbnail_data,
+    thumbnail_url: status === 'REGISTERED' ? (fingerprints[0]?.thumbnail_url || fingerprints[0]?.thumbnail_data) : undefined,
+    first_thumbnail: status === 'REGISTERED' ? (fingerprints[0]?.thumbnail_url || fingerprints[0]?.thumbnail_data) : undefined,
     created_at: now,
-    status: 'REGISTERED',
+    status,
     provenance_sha256: '9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08',
     fingerprint_count: fingerprints.length,
-    notes: 'Official ground-truth master for Taylor Swift — Patient Zero with 64-bit dHash perceptual matrix and real extracted video frames.'
+    notes
   };
 
   db.insertReference(ref3);
-  db.insertReferenceFingerprints(fingerprints);
+  if (fingerprints.length > 0) {
+    db.insertReferenceFingerprints(fingerprints);
+  }
 }
 

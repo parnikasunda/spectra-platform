@@ -131,6 +131,13 @@ async function runTestSuite() {
   // -------------------------------------------------------------
   console.log('\n[Test Group 4] Database CRUD & Forensic Suite Verification');
 
+  // Snapshot any user-registered references (non-FORENSIC_SAMPLE) before fixture test
+  const userRefsBackup = db.getReferences().filter(r => r.source_type !== 'FORENSIC_SAMPLE');
+  const userRefFpsBackup = new Map<string, FrameFingerprint[]>();
+  for (const ur of userRefsBackup) {
+    userRefFpsBackup.set(ur.id, db.getReferenceFingerprints(ur.id));
+  }
+
   const { loadedReferences, loadedCandidates } = loadOptionalForensicTestSuite();
   assert(loadedReferences >= 2, `Seeded ${loadedReferences} reference items successfully`);
   assert(loadedCandidates >= 4, `Seeded ${loadedCandidates} candidate sources across edge cases`);
@@ -167,6 +174,15 @@ async function runTestSuite() {
   assert(stats.total_references >= 2, 'Stats: computed total references is accurate');
   assert(stats.total_candidates >= 4, 'Stats: computed total candidates is accurate');
   assert(stats.confirmed_infringements >= 1, 'Stats: computed confirmed infringements matches human review');
+
+  // Restore user-registered references
+  for (const ur of userRefsBackup) {
+    db.upsertReference(ur);
+    const fps = userRefFpsBackup.get(ur.id) || [];
+    if (fps.length > 0) {
+      db.insertReferenceFingerprints(fps);
+    }
+  }
 
   // -------------------------------------------------------------
   // Test Group 5: Multi-Source Adapter Dispatch & DRM Compliance
@@ -207,36 +223,36 @@ async function runTestSuite() {
   assert(blockedProbe.pipelineStatus === 'BLOCKED', 'Detects Cloudflare Turnstile CAPTCHA wall (BLOCKED)');
   assert(blockedProbe.httpStatus === 403, 'Records HTTP 403 status code for blocked host');
 
-  // Probe unencrypted direct HLS manifest from piracy gateway
-  const hlsProbe = await piracy.acquireAndProbe('https://superstream.tv/hls/live/test/master.m3u8');
-  assert(hlsProbe.pipelineStatus === 'ACQUIRED', 'Direct HLS manifest acquired successfully');
-  assert(hlsProbe.mediaType === 'HLS_M3U8', 'Direct stream identified as HLS_M3U8');
+  // Probe non-existent piracy host: Must honestly report UNREACHABLE (never fake HTTP 200)
+  const unreachProbe = await piracy.acquireAndProbe('https://superstream-nonexistent-host-9999.tv/hls/live/test/master.m3u8');
+  assert(unreachProbe.pipelineStatus === 'UNREACHABLE', 'Non-existent host honestly reported as UNREACHABLE');
+  assert(unreachProbe.accessible === false, 'Unreachable stream is marked accessible: false');
 
   // -------------------------------------------------------------
-  // Test Group 6: Universal Multi-Source Discovery & Statutory Takedowns
+  // Test Group 6: Live Multi-Source Discovery & Statutory Takedowns
   // -------------------------------------------------------------
-  console.log('\n[Test Group 6] Universal Multi-Source Discovery & Statutory Takedowns');
+  console.log('\n[Test Group 6] Live Multi-Source Discovery & Statutory Takedowns');
 
-  // Multi-source discovery across all adapters: Discover 20-30 candidate URLs
-  const multiDiscovered = await AdapterRegistry.executeMultiSourceDiscovery('Taylor Swift Patient Zero', {
-    maxTotalCandidates: 28
+  // Live multi-source discovery across real adapters (YouTube, Dailymotion, Archive.org, Web Search)
+  const multiDiscovered = await AdapterRegistry.executeMultiSourceDiscovery('India vs New Zealand 1st T20', {
+    maxTotalCandidates: 20
   });
-  assert(multiDiscovered.length >= 20, `Discovered ${multiDiscovered.length} genuine candidate URLs (target >= 20)`);
+  assert(multiDiscovered.length >= 3, `Discovered ${multiDiscovered.length} genuine live candidate URLs`);
+
+  // Verify no fabricated hardcoded Rick Astley IDs or random slug URLs
+  const hasFabricatedRickRoll = multiDiscovered.some(d => d.url.includes('dQw4w9WgXcQ'));
+  assert(!hasFabricatedRickRoll, 'Never returns hardcoded unrelated YouTube IDs (e.g. dQw4w9WgXcQ)');
 
   const categorySet = new Set(multiDiscovered.map(d => d.sourceCategory));
-  assert(categorySet.has('YOUTUBE'), 'Discovered candidate URLs from YouTube');
-  assert(categorySet.has('STREAMING_SERVICE'), 'Discovered candidate URLs from Streaming Services');
-  assert(categorySet.has('SUSPECTED_PIRACY') || categorySet.has('EMBEDDED_PLAYER'), 'Discovered candidate URLs from Suspected Piracy / Embeds');
-  assert(categorySet.has('PUBLIC_PLATFORM'), 'Discovered candidate URLs from Public Video Platforms');
+  assert(categorySet.has('YOUTUBE') || categorySet.has('PUBLIC_PLATFORM') || categorySet.has('OTHER'), 'Discovered live candidate URLs from real accessible providers');
+
+  // Verify adapter diagnostics are recorded
+  const diagnostics = AdapterRegistry.getLastRunDiagnostics();
+  assert(diagnostics.length >= 3, `Recorded ${diagnostics.length} per-adapter diagnostic entries`);
 
   // Deduplication check
   const urlSet = new Set(multiDiscovered.map(d => d.url.toLowerCase()));
   assert(urlSet.size === multiDiscovered.length, 'Deduplication guarantees all discovered URLs are unique');
-
-  // Asset kind distinction
-  const hasPages = multiDiscovered.some(d => d.assetKind === 'DISCOVERED_PAGE');
-  const hasAssets = multiDiscovered.some(d => d.assetKind === 'VERIFIED_VIDEO_ASSET');
-  assert(hasPages && hasAssets, 'Distinguishes discovered web pages from verified direct video assets');
 
   // Statutory DMCA Takedown Notice generation
   const takedownNotice = VerifierEngine.generateTakedownNotice(primaryEvidence);

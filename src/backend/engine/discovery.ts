@@ -3,11 +3,11 @@
  * Multi-Source Discovery Engine & Job Orchestrator
  *
  * Coordinates modular source adapters across YouTube, commercial streaming
- * platforms (Netflix, Disney+ Hotstar), suspected piracy websites, public video
- * repositories, and arbitrary public websites with deduplication and verification.
+ * platforms (Netflix, Disney+ Hotstar, SonyLIV), suspected piracy websites, public video
+ * repositories (Dailymotion, Internet Archive), and general web search with deduplication,
+ * diagnostic reporting, and genuine verification.
  */
 
-import crypto from 'node:crypto';
 import { db } from '../db/database.js';
 import { CandidateItem, DiscoveryJob, DiscoveryProvider } from '../types.js';
 import { VerifierEngine } from './verifier.js';
@@ -20,7 +20,7 @@ export interface DiscoverySweepParams {
   queryKeywords: string;
   filterDomain?: string;
   maxCandidates?: number;
-  autoVerify?: boolean; // automatically trigger verification pipeline on discovery
+  autoVerify?: boolean;
 }
 
 export class DiscoveryEngine {
@@ -43,29 +43,31 @@ export class DiscoveryEngine {
       }
       return {
         normalizedUrl: normalized,
-        domain: parsed.hostname.toLowerCase()
+        domain: parsed.hostname.replace(/^www\./, '').toLowerCase()
       };
     } catch {
       const fallbackDomain = rawUrl.replace(/https?:\/\//, '').split('/')[0] || 'unknown-host';
       return {
         normalizedUrl: rawUrl.trim(),
-        domain: fallbackDomain.toLowerCase()
+        domain: fallbackDomain.replace(/^www\./, '').toLowerCase()
       };
     }
   }
 
   /**
-   * Executes a multi-source discovery sweep across configured adapters,
-   * deduplicates candidates, and performs automated verification.
-   * Discovers 20–30 genuine candidate URLs per investigation.
+   * Executes a multi-source discovery sweep across configured live adapters,
+   * deduplicates candidates, records diagnostic details, and performs verification.
    */
   public static async executeDiscoverySweep(params: DiscoverySweepParams): Promise<DiscoveryJob> {
     const jobId = `job_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     const now = new Date().toISOString();
-    const requestedMax = Math.max(25, params.maxCandidates || 25);
+    const requestedMax = Math.max(1, Math.min(50, params.maxCandidates || 15));
 
     const targetRef = params.targetReferenceId ? db.getReferenceById(params.targetReferenceId) : null;
     const refTitle = targetRef ? targetRef.title : params.queryKeywords;
+    const referenceSourceUrl = targetRef?.source_url
+      ? this.normalizeUrl(targetRef.source_url).normalizedUrl.toLowerCase()
+      : null;
 
     const job: DiscoveryJob = {
       id: jobId,
@@ -86,7 +88,7 @@ export class DiscoveryEngine {
     db.insertDiscoveryJob(job);
 
     try {
-      // 1. Multi-source discovery across modular adapters
+      // 1. Live multi-source discovery across modular adapters
       const rawDiscovered = await AdapterRegistry.executeMultiSourceDiscovery(
         params.queryKeywords,
         {
@@ -96,24 +98,45 @@ export class DiscoveryEngine {
         }
       );
 
+      const diagnostics = AdapterRegistry.getLastRunDiagnostics();
       const insertedCandidates: CandidateItem[] = [];
 
       for (const item of rawDiscovered) {
-        // Optional domain filter
         if (params.filterDomain && !item.domain.toLowerCase().includes(params.filterDomain.toLowerCase())) {
           continue;
         }
 
         const { normalizedUrl, domain } = this.normalizeUrl(item.url);
 
+        // Exclude the exact registered reference URL itself so a reference isn't flagged as a candidate copy of itself
+        if (referenceSourceUrl && normalizedUrl.toLowerCase() === referenceSourceUrl) {
+          continue;
+        }
+
+        const providerLabel: DiscoveryProvider =
+          params.provider && params.provider !== 'ALL_SOURCES'
+            ? params.provider
+            : item.sourceCategory === 'YOUTUBE'
+            ? 'YOUTUBE_PUBLIC'
+            : item.sourceCategory === 'PUBLIC_PLATFORM'
+            ? 'PUBLIC_PLATFORMS'
+            : item.sourceCategory === 'STREAMING_SERVICE'
+            ? 'STREAMING_SERVICES'
+            : item.sourceCategory === 'SUSPECTED_PIRACY'
+            ? 'SUSPECTED_PIRACY'
+            : 'SEARCH_CRAWLER';
+
         const candidate: CandidateItem = {
           id: `cand_${Date.now()}_${Math.random().toString(36).substring(7)}`,
           job_id: jobId,
           reference_id: params.targetReferenceId,
           source_url: normalizedUrl,
-          domain: domain,
+          canonical_url: normalizedUrl,
+          platform: item.platform || domain,
+          acquisition_status: 'DISCOVERED_UNVERIFIED',
+          domain,
           discovered_title: item.title,
-          discovery_provider: params.provider || 'ALL_SOURCES',
+          discovery_provider: providerLabel,
           source_category: item.sourceCategory,
           asset_kind: item.assetKind,
           discovered_at: new Date().toISOString(),
@@ -122,17 +145,22 @@ export class DiscoveryEngine {
           reachability_latency_ms: 0,
           media_type: item.suggestedType || 'UNKNOWN',
           is_live_stream: item.isLive || false,
-          verification_logs: `[Discovery] Multi-source sweep via ${item.sourceCategory} adapter (${domain}). Query: "${params.queryKeywords}"`
+          verification_logs: `[Discovery] Live sweep via ${item.platform || item.sourceCategory} (${domain}). Query: "${params.queryKeywords}". Relevance score: ${item.relevanceScore ?? 'N/A'}.`
         };
 
         const inserted = db.upsertCandidate(candidate);
         if (inserted) {
           insertedCandidates.push(candidate);
+        } else {
+          // If candidate URL already exists from an earlier sweep, update its reference_id/job_id if needed and include it for verification
+          const existing = db.getCandidates().find(c => c.source_url.toLowerCase() === normalizedUrl.toLowerCase());
+          if (existing) {
+            insertedCandidates.push(existing);
+          }
         }
       }
 
-      // 2. AUTOMATED CANDIDATE VERIFICATION & MEDIA ANALYSIS:
-      // Inspect reachability, analyze DRM/access controls, and run perceptual frame matching
+      // 2. Automated Candidate Verification & Media Analysis
       if (params.autoVerify !== false) {
         for (const cand of insertedCandidates) {
           try {
@@ -145,18 +173,37 @@ export class DiscoveryEngine {
         }
       }
 
+      const diagnosticSummary = diagnostics
+        .map(d => `[${d.sourceCategory}] ${d.message}`)
+        .join(' • ');
+
+      const updatedQueryParams = JSON.stringify({
+        keywords: params.queryKeywords,
+        filterDomain: params.filterDomain,
+        maxCandidates: requestedMax,
+        diagnostics
+      });
+
       const completedAt = new Date().toISOString();
+      const diagnosticMessage =
+        insertedCandidates.length === 0
+          ? `0 new candidates found. ${diagnosticSummary || 'No matching public results returned by live providers.'}`
+          : diagnosticSummary || undefined;
+
       db.updateDiscoveryJob(jobId, {
         status: 'COMPLETED',
         candidates_found: insertedCandidates.length,
-        completed_at: completedAt
+        completed_at: completedAt,
+        error_message: diagnosticMessage
       });
 
       return {
         ...job,
+        query_params: updatedQueryParams,
         status: 'COMPLETED',
         candidates_found: insertedCandidates.length,
-        completed_at: completedAt
+        completed_at: completedAt,
+        error_message: diagnosticMessage
       };
     } catch (err: any) {
       console.error('[Discovery Engine Error]', err);

@@ -59,7 +59,7 @@ export interface ReferenceItem {
   thumbnail_url?: string;
   first_thumbnail?: string;
   created_at: string;
-  status: 'REGISTERED' | 'PROCESSING' | 'FAILED' | 'ARCHIVED';
+  status: 'REGISTERED' | 'PROCESSING' | 'FAILED' | 'INVALID' | 'ARCHIVED';
   provenance_sha256: string;
   fingerprint_count: number;
   notes?: string;

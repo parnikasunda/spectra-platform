@@ -80,6 +80,7 @@ export async function uploadChunkedVideoReference(
     assetType?: string;
     sampleInterval?: string | number;
     auditNotes?: string;
+    replaceReferenceId?: string;
   },
   onProgress?: (progress: UploadProgress) => void
 ): Promise<ReferenceItem> {
@@ -112,7 +113,8 @@ export async function uploadChunkedVideoReference(
       rightsHolder: metadata.rightsHolder,
       assetType: metadata.assetType || 'VOD_FEATURE',
       sampleInterval: metadata.sampleInterval || 2.0,
-      auditNotes: metadata.auditNotes
+      auditNotes: metadata.auditNotes,
+      replaceReferenceId: metadata.replaceReferenceId
     })
   });
 

@@ -209,8 +209,29 @@ export class ArgusDatabase {
           }
         } catch {}
       }
+
+      // Purge any reference_fingerprints that came from lavfi testsrc / testsrc2 colour bars or synthetic cards
+      const refRows = this.db.prepare(`SELECT id FROM reference_items`).all() as { id: string }[];
+      for (const ref of refRows) {
+        const fps = this.db.prepare(`SELECT phash_hex FROM reference_fingerprints WHERE reference_id = ?`).all(ref.id) as { phash_hex: string }[];
+        const hasTestPattern = fps.some(f => {
+          const h = (f.phash_hex || '').toLowerCase();
+          return h === '1818181818181818' || h.startsWith('2424666') || h === '00088e4c08000000';
+        });
+        if (hasTestPattern) {
+          this.db.prepare(`DELETE FROM reference_fingerprints WHERE reference_id = ?`).run(ref.id);
+          this.db.prepare(`
+            UPDATE reference_items
+            SET status = 'INVALID',
+                thumbnail_url = NULL,
+                fingerprint_count = 0,
+                notes = 'INVALID SOURCE: Source file contains synthetic FFmpeg colour-bar test patterns (lavfi testsrc/testsrc2) rather than genuine reference video frames. Provide a valid source video to extract ground-truth keyframes.'
+            WHERE id = ?
+          `).run(ref.id);
+        }
+      }
     } catch (err: any) {
-      console.warn('[DB Migration] SVG cleanup notice:', err.message);
+      console.warn('[DB Migration] Cleanup notice:', err.message);
     }
   }
 
@@ -271,6 +292,69 @@ export class ArgusDatabase {
     );
   }
 
+  public upsertReference(item: ReferenceItem): void {
+    const stmt = this.db.prepare(`
+      INSERT INTO reference_items (
+        id, title, rights_holder, asset_type, duration_sec, resolution,
+        fps, codec, source_type, source_url, file_path, thumbnail_url,
+        created_at, status, provenance_sha256, fingerprint_count, notes
+      ) VALUES (
+        ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+      )
+      ON CONFLICT(id) DO UPDATE SET
+        title = excluded.title,
+        rights_holder = excluded.rights_holder,
+        asset_type = excluded.asset_type,
+        duration_sec = excluded.duration_sec,
+        resolution = excluded.resolution,
+        fps = excluded.fps,
+        codec = excluded.codec,
+        source_type = excluded.source_type,
+        source_url = excluded.source_url,
+        file_path = excluded.file_path,
+        thumbnail_url = excluded.thumbnail_url,
+        status = excluded.status,
+        provenance_sha256 = excluded.provenance_sha256,
+        fingerprint_count = excluded.fingerprint_count,
+        notes = excluded.notes
+    `);
+    stmt.run(
+      item.id,
+      item.title,
+      item.rights_holder,
+      item.asset_type,
+      item.duration_sec,
+      item.resolution,
+      item.fps,
+      item.codec,
+      item.source_type,
+      item.source_url || null,
+      item.file_path || null,
+      item.thumbnail_url || null,
+      item.created_at,
+      item.status,
+      item.provenance_sha256,
+      item.fingerprint_count,
+      item.notes || null
+    );
+  }
+
+  public markReferenceInvalid(id: string, reason: string): void {
+    this.db.prepare(`DELETE FROM reference_fingerprints WHERE reference_id = ?`).run(id);
+    this.db.prepare(`
+      UPDATE reference_items
+      SET status = 'INVALID',
+          fingerprint_count = 0,
+          thumbnail_url = NULL,
+          notes = ?
+      WHERE id = ?
+    `).run(reason, id);
+  }
+
+  public clearReferenceFingerprints(refId: string): void {
+    this.db.prepare(`DELETE FROM reference_fingerprints WHERE reference_id = ?`).run(refId);
+  }
+
   public updateReferenceFingerprintCount(id: string, count: number, thumbnailUrl?: string): void {
     if (thumbnailUrl) {
       const stmt = this.db.prepare(`
@@ -298,6 +382,14 @@ export class ArgusDatabase {
       LIMIT 1
     `);
     return rows.map(row => {
+      if (row.status === 'INVALID') {
+        return {
+          ...row,
+          thumbnail_url: undefined,
+          first_thumbnail: undefined,
+          fingerprint_count: 0
+        };
+      }
       const fp0 = fpStmt.get(row.id) as { thumbnail_url?: string; thumbnail_path?: string; thumbnail_data?: string } | undefined;
       const persistedThumb = fp0?.thumbnail_url || fp0?.thumbnail_path || row.thumbnail_url || fp0?.thumbnail_data || undefined;
       return {
@@ -312,6 +404,14 @@ export class ArgusDatabase {
     const stmt = this.db.prepare(`SELECT * FROM reference_items WHERE id = ?`);
     const row = stmt.get(id) as unknown as ReferenceItem | undefined;
     if (!row) return null;
+    if (row.status === 'INVALID') {
+      return {
+        ...row,
+        thumbnail_url: undefined,
+        first_thumbnail: undefined,
+        fingerprint_count: 0
+      };
+    }
     const fpStmt = this.db.prepare(`
       SELECT thumbnail_url, thumbnail_path, thumbnail_data
       FROM reference_fingerprints

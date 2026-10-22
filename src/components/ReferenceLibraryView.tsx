@@ -70,6 +70,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
 
   // Register Modal Form state
   const [mode, setMode] = useState<'upload' | 'url'>('upload');
+  const [replaceReferenceId, setReplaceReferenceId] = useState<string | undefined>(undefined);
   const [title, setTitle] = useState('');
   const [rightsHolder, setRightsHolder] = useState('');
   const [assetType, setAssetType] = useState('VOD_FEATURE');
@@ -98,6 +99,33 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
     } finally {
       setIsLoadingDetails(false);
     }
+  };
+
+  const handleOpenProvideValidSource = (ref: ReferenceItem) => {
+    setReplaceReferenceId(ref.id);
+    setTitle(ref.title);
+    setRightsHolder(ref.rights_holder);
+    setAssetType(ref.asset_type || 'VOD_FEATURE');
+    setSourceUrl('');
+    setFile(null);
+    setAuditNotes(`Validated source replacement for ${ref.id}`);
+    setSubmitError(null);
+    setUploadProgress(null);
+    setSelectedRef(null);
+    onOpenRegisterModal();
+  };
+
+  const handleOpenNewRegister = () => {
+    setReplaceReferenceId(undefined);
+    setTitle('');
+    setRightsHolder('');
+    setAssetType('VOD_FEATURE');
+    setSourceUrl('');
+    setFile(null);
+    setAuditNotes('');
+    setSubmitError(null);
+    setUploadProgress(null);
+    onOpenRegisterModal();
   };
 
   const handleCopyHash = (hash: string) => {
@@ -134,7 +162,8 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
             rightsHolder: rightsHolder.trim(),
             assetType,
             sampleInterval,
-            auditNotes: auditNotes.trim() || undefined
+            auditNotes: auditNotes.trim() || undefined,
+            replaceReferenceId
           },
           (progress) => {
             setUploadProgress(progress);
@@ -155,9 +184,10 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
           sampleInterval: parseFloat(sampleInterval),
           sample_interval_sec: parseFloat(sampleInterval),
           auditNotes: auditNotes.trim() || undefined,
-          notes: auditNotes.trim() || undefined
+          notes: auditNotes.trim() || undefined,
+          replaceReferenceId
         };
-        if (onRegisterUrl) {
+        if (onRegisterUrl && !replaceReferenceId) {
           const res: any = await onRegisterUrl(payload);
           createdItem = res && res.id ? res : (res && res.data ? res.data : null);
         } else {
@@ -167,6 +197,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
       }
 
       // Reset form on success
+      setReplaceReferenceId(undefined);
       setTitle('');
       setRightsHolder('');
       setSourceUrl('');
@@ -180,6 +211,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
         handleOpenDetails(createdItem);
       }
     } catch (err: any) {
+      onRefresh();
       setSubmitError(err.message || 'Reference registration and fingerprinting failed');
     } finally {
       setIsSubmitting(false);
@@ -221,7 +253,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
           </div>
 
           <button
-            onClick={onOpenRegisterModal}
+            onClick={handleOpenNewRegister}
             className="px-3 py-1.5 text-xs font-medium text-slate-950 bg-cyan-400 hover:bg-cyan-300 active:bg-cyan-500 rounded font-sans transition-colors cursor-pointer inline-flex items-center gap-1.5 shadow-sm shadow-cyan-950"
           >
             <Upload className="w-3.5 h-3.5" />
@@ -239,7 +271,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
             Upload reference video masters (.mp4, .mkv, .mov) or connect authorized stream URLs to generate ground-truth perceptual fingerprints.
           </p>
           <button
-            onClick={onOpenRegisterModal}
+            onClick={handleOpenNewRegister}
             className="mt-4 px-3 py-1.5 text-xs font-medium text-cyan-400 bg-cyan-950/60 border border-cyan-800/60 rounded hover:bg-cyan-900/40 transition-colors cursor-pointer inline-flex items-center gap-1.5"
           >
             <Upload className="w-3.5 h-3.5" />
@@ -248,106 +280,163 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
         </div>
       ) : (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredReferences.map(ref => (
-            <div 
-              key={ref.id}
-              className="group bg-slate-900/80 border border-slate-800/80 hover:border-slate-700 rounded-lg overflow-hidden transition-all flex flex-col"
-            >
-              {/* Thumbnail Header with Metadata Overlay */}
-              <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden border-b border-slate-800/60">
-                {(() => {
-                  const cardThumbSrc = resolveFrameImageUrl(
-                    ref.thumbnail_url ||
-                    ref.first_thumbnail ||
-                    ref.fingerprints?.[0]?.thumbnail_url ||
-                    ref.fingerprints?.[0]?.thumbnail_path ||
-                    ref.fingerprints?.[0]?.thumbnail_data
-                  );
-                  if (cardThumbSrc && !failedThumbnails[ref.id]) {
-                    return (
-                      <img 
-                        src={cardThumbSrc} 
-                        alt={ref.title} 
-                        className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
-                        referrerPolicy="no-referrer"
-                        onError={() => setFailedThumbnails(prev => ({ ...prev, [ref.id]: true }))}
-                      />
+          {filteredReferences.map(ref => {
+            const isInvalid = ref.status === 'INVALID';
+            return (
+              <div 
+                key={ref.id}
+                className={`group bg-slate-900/80 border rounded-lg overflow-hidden transition-all flex flex-col ${
+                  isInvalid
+                    ? 'border-rose-800/70 hover:border-rose-700'
+                    : 'border-slate-800/80 hover:border-slate-700'
+                }`}
+              >
+                {/* Thumbnail Header with Metadata Overlay */}
+                <div className="relative aspect-video bg-slate-950 flex items-center justify-center overflow-hidden border-b border-slate-800/60">
+                  {(() => {
+                    if (isInvalid) {
+                      return (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-center p-4 bg-rose-950/20">
+                          <AlertCircle className="w-7 h-7 text-rose-400 mb-1.5 shrink-0" />
+                          <span className="text-xs font-semibold text-rose-300 uppercase tracking-wide">
+                            INVALID SOURCE VIDEO
+                          </span>
+                          <span className="text-[11px] text-rose-200/80 mt-1 max-w-xs leading-snug">
+                            Source file contains synthetic FFmpeg colour bars / test pattern. Valid source video required.
+                          </span>
+                        </div>
+                      );
+                    }
+                    const cardThumbSrc = resolveFrameImageUrl(
+                      ref.thumbnail_url ||
+                      ref.first_thumbnail ||
+                      ref.fingerprints?.[0]?.thumbnail_url ||
+                      ref.fingerprints?.[0]?.thumbnail_path ||
+                      ref.fingerprints?.[0]?.thumbnail_data
                     );
-                  }
-                  return (
-                    <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 text-center p-2 bg-slate-950">
-                      <AlertCircle className="w-6 h-6 text-amber-400 mb-1 shrink-0" />
-                      <span className="text-xs font-medium text-slate-300">Reference Frame Unavailable</span>
-                      <span className="text-[10px] text-slate-500 font-mono">Ground-truth keyframe extraction pending</span>
+                    if (cardThumbSrc && !failedThumbnails[ref.id]) {
+                      return (
+                        <img 
+                          src={cardThumbSrc} 
+                          alt={ref.title} 
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          referrerPolicy="no-referrer"
+                          onError={() => setFailedThumbnails(prev => ({ ...prev, [ref.id]: true }))}
+                        />
+                      );
+                    }
+                    return (
+                      <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 text-center p-2 bg-slate-950">
+                        <AlertCircle className="w-6 h-6 text-amber-400 mb-1 shrink-0" />
+                        <span className="text-xs font-medium text-slate-300">Reference Frame Unavailable</span>
+                        <span className="text-[10px] text-slate-500 font-mono">Ground-truth keyframe extraction pending</span>
+                      </div>
+                    );
+                  })()}
+                  
+                  <div className="absolute top-2 left-2 flex items-center gap-1.5">
+                    <span className="px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase bg-slate-950/80 backdrop-blur-md text-cyan-300 border border-cyan-500/30 rounded">
+                      {ref.asset_type.replace('_', ' ')}
+                    </span>
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-mono font-semibold uppercase rounded border backdrop-blur-md ${
+                        isInvalid
+                          ? 'bg-rose-950/90 text-rose-300 border-rose-500/50'
+                          : 'bg-emerald-950/90 text-emerald-300 border-emerald-500/40'
+                      }`}
+                    >
+                      {ref.status}
+                    </span>
+                  </div>
+
+                  <div className="absolute top-2 right-2">
+                    <span className="px-2 py-0.5 text-[10px] font-mono bg-slate-950/80 backdrop-blur-md text-slate-300 border border-slate-800 rounded">
+                      {ref.resolution || '1080p'} • {ref.fps ? `${ref.fps} fps` : '24 fps'}
+                    </span>
+                  </div>
+
+                  <div className="absolute bottom-2 right-2">
+                    <span
+                      className={`px-2 py-0.5 text-[10px] font-mono rounded flex items-center gap-1 border ${
+                        isInvalid
+                          ? 'bg-rose-950/90 text-rose-300 border-rose-800/80'
+                          : 'bg-cyan-950/90 text-cyan-300 border-cyan-800/80'
+                      }`}
+                    >
+                      <Film className="w-2.5 h-2.5" />
+                      {isInvalid ? '0 Valid Keyframes' : `${ref.fingerprint_count || 0} Keyframe Hashes`}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Body */}
+                <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
+                  <div>
+                    <h3 className="text-sm font-semibold text-white truncate" title={ref.title}>
+                      {ref.title}
+                    </h3>
+                    <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
+                      <span>{ref.rights_holder}</span>
+                      <span>•</span>
+                      <span className="font-mono">{ref.source_type}</span>
                     </div>
-                  );
-                })()}
-                
-                <div className="absolute top-2 left-2">
-                  <span className="px-2 py-0.5 text-[10px] font-medium tracking-wide uppercase bg-slate-950/80 backdrop-blur-md text-cyan-300 border border-cyan-500/30 rounded">
-                    {ref.asset_type.replace('_', ' ')}
-                  </span>
-                </div>
+                  </div>
 
-                <div className="absolute top-2 right-2">
-                  <span className="px-2 py-0.5 text-[10px] font-mono bg-slate-950/80 backdrop-blur-md text-slate-300 border border-slate-800 rounded">
-                    {ref.resolution || '1080p'} • {ref.fps ? `${ref.fps} fps` : '24 fps'}
-                  </span>
-                </div>
+                  {isInvalid ? (
+                    <div className="p-2.5 bg-rose-950/30 border border-rose-800/60 rounded text-[11px] text-rose-200 space-y-1">
+                      <div className="font-mono text-[10px] uppercase text-rose-400 font-semibold">
+                        Validation Diagnostic: Status = INVALID
+                      </div>
+                      <p className="text-[11px] text-rose-200/90 leading-relaxed line-clamp-3" title={ref.notes}>
+                        {ref.notes || 'Source video contains synthetic test patterns / colour bars and was rejected. Upload a valid video master.'}
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="p-2 bg-slate-950/60 border border-slate-800/60 rounded text-[11px] font-mono space-y-1">
+                      <div className="text-slate-400 text-[10px] uppercase flex items-center justify-between">
+                        <span>Cryptographic Provenance</span>
+                        <span className="text-emerald-400">SHA-256</span>
+                      </div>
+                      <div className="text-slate-300 truncate" title={ref.provenance_sha256}>
+                        {ref.provenance_sha256 || 'Calculated during keyframe extraction'}
+                      </div>
+                    </div>
+                  )}
 
-                <div className="absolute bottom-2 right-2">
-                  <span className="px-2 py-0.5 text-[10px] font-mono bg-cyan-950/90 text-cyan-300 border border-cyan-800/80 rounded flex items-center gap-1">
-                    <Film className="w-2.5 h-2.5" />
-                    {ref.fingerprint_count || 0} Keyframe Hashes
-                  </span>
+                  {/* Actions */}
+                  <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => handleOpenDetails(ref)}
+                        className="px-2.5 py-1 text-xs text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/40 border border-cyan-800/40 rounded transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                      >
+                        <Eye className="w-3.5 h-3.5" />
+                        <span>Inspect Keyframes</span>
+                      </button>
+
+                      {isInvalid && (
+                        <button
+                          onClick={() => handleOpenProvideValidSource(ref)}
+                          className="px-2.5 py-1 text-xs font-medium text-amber-300 hover:text-amber-200 bg-amber-950/50 hover:bg-amber-900/50 border border-amber-700/60 rounded transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Upload className="w-3.5 h-3.5" />
+                          <span>Provide Valid Source</span>
+                        </button>
+                      )}
+                    </div>
+
+                    <button
+                      onClick={() => onDelete(ref.id)}
+                      className="p-1 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
+                      title="Delete reference"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
                 </div>
               </div>
-
-              {/* Body */}
-              <div className="p-4 flex-1 flex flex-col justify-between space-y-3">
-                <div>
-                  <h3 className="text-sm font-semibold text-white truncate" title={ref.title}>
-                    {ref.title}
-                  </h3>
-                  <div className="flex items-center gap-2 mt-1 text-xs text-slate-400">
-                    <span>{ref.rights_holder}</span>
-                    <span>•</span>
-                    <span className="font-mono">{ref.source_type}</span>
-                  </div>
-                </div>
-
-                {/* Provenance Hash */}
-                <div className="p-2 bg-slate-950/60 border border-slate-800/60 rounded text-[11px] font-mono space-y-1">
-                  <div className="text-slate-400 text-[10px] uppercase flex items-center justify-between">
-                    <span>Cryptographic Provenance</span>
-                    <span className="text-emerald-400">SHA-256</span>
-                  </div>
-                  <div className="text-slate-300 truncate" title={ref.provenance_sha256}>
-                    {ref.provenance_sha256 || 'Calculated during keyframe extraction'}
-                  </div>
-                </div>
-
-                {/* Actions */}
-                <div className="pt-2 border-t border-slate-800/60 flex items-center justify-between">
-                  <button
-                    onClick={() => handleOpenDetails(ref)}
-                    className="px-2.5 py-1 text-xs text-cyan-400 hover:text-cyan-300 hover:bg-cyan-950/40 border border-cyan-800/40 rounded transition-colors inline-flex items-center gap-1.5 cursor-pointer"
-                  >
-                    <Eye className="w-3.5 h-3.5" />
-                    <span>Inspect Keyframes</span>
-                  </button>
-
-                  <button
-                    onClick={() => onDelete(ref.id)}
-                    className="p-1 text-slate-400 hover:text-rose-400 transition-colors cursor-pointer"
-                    title="Delete reference"
-                  >
-                    <Trash2 className="w-3.5 h-3.5" />
-                  </button>
-                </div>
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       )}
 
@@ -361,6 +450,15 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                 <div className="flex items-center gap-2">
                   <Film className="w-4 h-4 text-cyan-400" />
                   <h2 className="text-sm font-semibold text-white truncate max-w-md">{selectedRef.title}</h2>
+                  <span
+                    className={`px-2 py-0.5 text-[10px] font-mono font-semibold uppercase rounded border ${
+                      selectedRef.status === 'INVALID'
+                        ? 'bg-rose-950/90 text-rose-300 border-rose-500/50'
+                        : 'bg-emerald-950/90 text-emerald-300 border-emerald-500/40'
+                    }`}
+                  >
+                    {selectedRef.status}
+                  </span>
                 </div>
                 <div className="text-xs text-slate-400 font-mono">
                   ID: {selectedRef.id} • {selectedRef.rights_holder} • {selectedRef.resolution}
@@ -379,7 +477,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
               <div className="p-3 bg-cyan-950/20 border border-cyan-800/40 rounded text-xs text-slate-300">
                 <div className="font-semibold text-cyan-300 mb-1">Perceptual Frame Fingerprint Sequence</div>
                 <p className="text-slate-400 text-[11px] leading-relaxed">
-                  Extracted at calibrated intervals. Each 64-bit dHash string captures spatial gradients invariant to re-encoding, resolution downscaling, and minor color variations.
+                  Extracted at calibrated intervals from validated video masters. Each 64-bit dHash string captures spatial gradients alongside its decoded JPEG keyframe.
                 </p>
               </div>
 
@@ -387,6 +485,30 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                 <div className="py-12 flex flex-col items-center justify-center gap-2 text-slate-400 text-xs">
                   <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
                   <span>Loading frame hashes and visual thumbnails...</span>
+                </div>
+              ) : selectedRef.status === 'INVALID' ? (
+                <div className="p-6 bg-rose-950/25 border border-rose-800/60 rounded-lg space-y-3 text-xs">
+                  <div className="flex items-center gap-2 text-rose-300 font-semibold text-sm">
+                    <AlertCircle className="w-5 h-5 text-rose-400 shrink-0" />
+                    <span>Reference Source Marked INVALID — Valid Video Source Required</span>
+                  </div>
+                  <p className="text-rose-200/90 leading-relaxed">
+                    {selectedRef.notes || 'The registered source file contains synthetic FFmpeg colour bars or test patterns rather than authentic video content. Colour-bar frames are rejected and never displayed as reference keyframes.'}
+                  </p>
+                  {selectedRef.file_path && (
+                    <div className="p-2 bg-slate-950/80 border border-slate-800 rounded font-mono text-[11px] text-slate-400">
+                      Rejected File: {selectedRef.file_path}
+                    </div>
+                  )}
+                  <div className="pt-2">
+                    <button
+                      onClick={() => handleOpenProvideValidSource(selectedRef)}
+                      className="px-3 py-1.5 text-xs font-medium text-slate-950 bg-amber-400 hover:bg-amber-300 rounded transition-colors inline-flex items-center gap-1.5 cursor-pointer"
+                    >
+                      <Upload className="w-3.5 h-3.5" />
+                      <span>Upload / Provide Valid Source Video</span>
+                    </button>
+                  </div>
                 </div>
               ) : selectedRef.fingerprints && selectedRef.fingerprints.length > 0 ? (
                 <div className="space-y-3">
@@ -396,7 +518,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                       className="flex items-center gap-4 p-3 bg-slate-950 border border-slate-800 rounded-lg hover:border-slate-700 transition-colors"
                     >
                       {/* Frame Thumbnail */}
-                      <div className="w-28 h-16 bg-slate-900 rounded overflow-hidden shrink-0 border border-slate-800 relative">
+                      <div className="w-32 h-20 bg-slate-900 rounded overflow-hidden shrink-0 border border-slate-800 relative">
                         {(() => {
                           const frameSrc = resolveFrameImageUrl(fp.thumbnail_url || fp.thumbnail_path || fp.thumbnail_data);
                           const key = fp.id || `${idx}`;
@@ -427,7 +549,7 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                       <div className="flex-1 min-w-0 space-y-1">
                         <div className="flex items-center justify-between text-xs">
                           <span className="font-medium text-slate-200">Frame #{fp.frame_index ?? idx}</span>
-                          <span className="text-[11px] text-slate-400 font-mono">t = {fp.timestamp_sec}s</span>
+                          <span className="text-[11px] text-slate-400 font-mono">t = {fp.timestamp_sec.toFixed(2)}s</span>
                         </div>
                         
                         <div className="flex items-center gap-2 bg-slate-900/80 px-2.5 py-1 rounded border border-slate-800/80">
@@ -447,6 +569,12 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
                             )}
                           </button>
                         </div>
+
+                        {fp.thumbnail_url && (
+                          <div className="text-[10px] font-mono text-slate-500 truncate">
+                            Saved JPEG: {fp.thumbnail_url}
+                          </div>
+                        )}
                       </div>
                     </div>
                   ))}
@@ -459,7 +587,9 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
             </div>
 
             <div className="p-4 border-t border-slate-800 bg-slate-950/40 flex items-center justify-between text-xs text-slate-400">
-              <span className="font-mono">Total Verified Keyframes: {selectedRef.fingerprints?.length || selectedRef.fingerprint_count || 0}</span>
+              <span className="font-mono">
+                Total Verified Keyframes: {selectedRef.status === 'INVALID' ? 0 : (selectedRef.fingerprints?.length || selectedRef.fingerprint_count || 0)}
+              </span>
               <button
                 onClick={() => setSelectedRef(null)}
                 className="px-3 py-1.5 text-xs text-white bg-slate-800 hover:bg-slate-700 rounded transition-colors cursor-pointer"
@@ -477,11 +607,20 @@ export const ReferenceLibraryView: React.FC<ReferenceLibraryViewProps> = ({
           <div className="bg-slate-900 border border-slate-800 rounded-lg max-w-xl w-full shadow-2xl overflow-hidden">
             <div className="p-4 border-b border-slate-800 flex items-center justify-between">
               <div>
-                <h3 className="text-sm font-semibold text-white">Register Reference Ground Truth</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Stage A: Media ingestion and perceptual fingerprint extraction</p>
+                <h3 className="text-sm font-semibold text-white">
+                  {replaceReferenceId ? `Provide Valid Video Source (${replaceReferenceId})` : 'Register Reference Ground Truth'}
+                </h3>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  {replaceReferenceId
+                    ? 'Replace INVALID test-pattern source with an authentic video file or stream'
+                    : 'Stage A: Media ingestion and perceptual fingerprint extraction'}
+                </p>
               </div>
               <button 
-                onClick={onCloseRegisterModal}
+                onClick={() => {
+                  setReplaceReferenceId(undefined);
+                  onCloseRegisterModal();
+                }}
                 disabled={isSubmitting}
                 className="text-slate-400 hover:text-white p-1 cursor-pointer disabled:opacity-40"
               >

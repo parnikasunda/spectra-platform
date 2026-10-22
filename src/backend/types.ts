@@ -5,7 +5,7 @@
 
 export type AssetType = 'VOD_FEATURE' | 'EPISODIC' | 'LIVE_SPORTS' | 'COMMERCIAL' | 'TRAILER';
 
-export type ReferenceStatus = 'REGISTERED' | 'PROCESSING' | 'FAILED' | 'ARCHIVED';
+export type ReferenceStatus = 'REGISTERED' | 'PROCESSING' | 'FAILED' | 'INVALID' | 'ARCHIVED';
 
 export type PipelineStatus = 
   | 'DISCOVERED'

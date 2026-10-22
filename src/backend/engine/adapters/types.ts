@@ -8,12 +8,24 @@ import { PipelineStatus } from '../../types.js';
 export interface DiscoveredItem {
   url: string;
   title: string;
+  platform: string;
   sourceCategory: 'YOUTUBE' | 'STREAMING_SERVICE' | 'SUSPECTED_PIRACY' | 'PUBLIC_PLATFORM' | 'EMBEDDED_PLAYER' | 'DIRECT_STREAM' | 'OTHER';
   assetKind: 'DISCOVERED_PAGE' | 'VERIFIED_VIDEO_ASSET';
   suggestedType: 'HLS_M3U8' | 'MP4' | 'WEBM' | 'HTML_PLAYER' | 'DASH_MPD' | 'UNKNOWN';
   domain: string;
   isLive?: boolean;
+  relevanceScore?: number;
   metadata?: Record<string, any>;
+}
+
+export interface AdapterDiagnostic {
+  adapterId: string;
+  adapterName: string;
+  sourceCategory: string;
+  status: 'LIVE_OK' | 'NO_RESULTS' | 'REQUIRES_API_KEY' | 'NETWORK_ERROR';
+  candidatesFound: number;
+  message: string;
+  requiresCredentials?: boolean;
 }
 
 export interface MediaAcquisitionResult {
@@ -23,6 +35,8 @@ export interface MediaAcquisitionResult {
   latencyMs: number;
   mediaType: 'HLS_M3U8' | 'MP4' | 'WEBM' | 'HTML_PLAYER' | 'DASH_MPD' | 'UNKNOWN';
   resolvedMediaUrl?: string; // e.g. direct .m3u8, .mpd, or .mp4 extracted from embedded player
+  pageTitle?: string;
+  platform?: string;
   resolution?: string;
   durationSec?: number;
   drmScheme?: string; // 'Widevine' | 'PlayReady' | 'FairPlay' | 'None'
@@ -38,5 +52,6 @@ export interface SourceAdapter {
   sourceCategory: 'YOUTUBE' | 'STREAMING_SERVICE' | 'SUSPECTED_PIRACY' | 'PUBLIC_PLATFORM' | 'EMBEDDED_PLAYER' | 'DIRECT_STREAM' | 'OTHER';
   canHandle(url: string): boolean;
   discover?(query: string, options: { maxResults?: number; page?: number; referenceTitle?: string }): Promise<DiscoveredItem[]>;
+  getLastDiagnostic?(): AdapterDiagnostic | null;
   acquireAndProbe(targetUrl: string, options?: { timeoutMs?: number }): Promise<MediaAcquisitionResult>;
 }

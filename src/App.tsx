@@ -48,6 +48,7 @@ export default function App() {
   const [isLoading, setIsLoading] = useState(true);
   const [isLoadingSample, setIsLoadingSample] = useState(false);
   const [isRegisterModalOpen, setIsRegisterModalOpen] = useState(false);
+  const [selectedReferenceFilter, setSelectedReferenceFilter] = useState<string>('');
   const [notification, setNotification] = useState<{ message: string; type: 'success' | 'info' | 'error' } | null>(null);
 
   const showNotification = (message: string, type: 'success' | 'info' | 'error' = 'info') => {
@@ -155,7 +156,7 @@ export default function App() {
   };
 
   const handleLiveSportsSweep = async () => {
-    const sportsRef = references.find(r => r.asset_type === 'LIVE_SPORTS') || references[0];
+    const sportsRef = references.find(r => r.asset_type === 'LIVE_SPORTS' && r.status === 'REGISTERED') || references.find(r => r.status === 'REGISTERED') || references[0];
     const keywords = sportsRef ? sportsRef.title : 'Live Sports Champions League Final';
     showNotification(`Executing automated live sports surveillance sweep for "${keywords}"...`, 'info');
     try {
@@ -164,9 +165,9 @@ export default function App() {
         provider: 'SPORTS_DIRECTORY',
         target_reference_id: sportsRef?.id,
         query_keywords: keywords,
-        max_candidates: 6
+        max_candidates: 10
       });
-      showNotification(`Live sweep complete! Found ${job.candidates_found} active streams with broadcast delay analysis.`, 'success');
+      showNotification(`Live sweep complete! Found ${job.candidates_found} candidate source(s).`, 'success');
       await loadAllData();
     } catch (err: any) {
       showNotification(`Live sweep error: ${err.message}`, 'error');
@@ -238,6 +239,7 @@ export default function App() {
                 onRefresh={loadAllData}
                 onLaunchSweep={handleLaunchSweep}
                 onNavigateToCandidates={(refId) => {
+                  setSelectedReferenceFilter(refId || '');
                   setCurrentTab('candidates');
                 }}
               />
@@ -247,6 +249,7 @@ export default function App() {
               <CandidateMatrixView
                 candidates={candidates}
                 references={references}
+                initialReferenceId={selectedReferenceFilter}
                 onRefresh={loadAllData}
                 onVerifyCandidate={handleVerifyCandidate}
                 onQuickInspect={handleQuickInspect}

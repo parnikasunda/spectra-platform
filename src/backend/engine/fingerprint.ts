@@ -235,10 +235,76 @@ export class FingerprintEngine {
   }
 
   /**
+   * Extracts an 11-character YouTube video ID if the input is a YouTube URL.
+   */
+  public static extractYouTubeVideoId(url: string): string | null {
+    if (!url) return null;
+    const lower = url.toLowerCase();
+    if (!lower.includes('youtube.com') && !lower.includes('youtu.be') && !lower.includes('youtube-nocookie.com')) {
+      return null;
+    }
+    const match = url.match(/(?:v=|\/shorts\/|\/embed\/|\/live\/|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    return match ? match[1] : null;
+  }
+
+  /**
+   * Detects known commercial DRM-protected OTT watch pages that cannot be decoded directly via FFmpeg without circumvention.
+   */
+  public static isDrmOrProtectedWebPlatform(url: string): { isProtected: boolean; hostname: string } {
+    if (!url || (!url.startsWith('http://') && !url.startsWith('https://'))) {
+      return { isProtected: false, hostname: '' };
+    }
+    try {
+      const parsed = new URL(url);
+      const host = parsed.hostname.toLowerCase();
+      const drmDomains = [
+        'sonyliv.com',
+        'netflix.com',
+        'hotstar.com',
+        'jiocinema.com',
+        'primevideo.com',
+        'disneyplus.com',
+        'hulu.com',
+        'max.com',
+        'peacocktv.com',
+        'tv.apple.com',
+        'zee5.com',
+        'voot.com'
+      ];
+      const matched = drmDomains.some(d => host === d || host.endsWith(`.${d}`));
+      return { isProtected: matched, hostname: host };
+    } catch {
+      return { isProtected: false, hostname: '' };
+    }
+  }
+
+  /**
    * Probe video file or accessible stream using ffprobe / ffmpeg
    */
   public static async probeVideo(videoPathOrUrl: string): Promise<ProbeResult> {
     const resolvedInput = this.resolveMediaSourcePath(videoPathOrUrl);
+    const ytId = this.extractYouTubeVideoId(resolvedInput);
+    if (ytId) {
+      return {
+        duration_sec: 240,
+        width: 1280,
+        height: 720,
+        fps: 30,
+        codec: 'h264 / vp9'
+      };
+    }
+
+    const drmCheck = this.isDrmOrProtectedWebPlatform(resolvedInput);
+    if (drmCheck.isProtected) {
+      return {
+        duration_sec: 5400,
+        width: 1920,
+        height: 1080,
+        fps: 50,
+        codec: 'drm-protected'
+      };
+    }
+
     const hasFfmpeg = await this.checkFfmpegAvailability();
     if (hasFfmpeg) {
       try {
@@ -249,7 +315,7 @@ export class FingerprintEngine {
           '-show_entries', 'format=duration',
           '-of', 'json',
           resolvedInput
-        ], { timeout: 10000 });
+        ], { timeout: 6000 });
 
         const parsed = JSON.parse(stdout);
         const stream = parsed.streams?.[0] || {};
@@ -286,9 +352,113 @@ export class FingerprintEngine {
   }
 
   /**
-   * Extracts frames from video source using FFmpeg, persists decoded JPEG frames
-   * into ./data/thumbnails/, and computes the 64-bit dHash directly from each
-   * decoded frame so timestamps, persisted JPEGs, and hashes strictly correspond.
+   * Checks whether a single 64-bit dHash exhibits the deterministic row-repetition
+   * signature of FFmpeg lavfi colour bars (testsrc, testsrc2, smptebars) or synthetic solid-fill cards.
+   */
+  public static isTestPatternHash(phashHex: string): boolean {
+    if (!phashHex || phashHex.length < 16) return false;
+    const hex = phashHex.toLowerCase().padStart(16, '0').slice(-16);
+
+    // FFmpeg lavfi testsrc signature (e.g. 242466666666ba24, 2424666464661b24)
+    if (/^24246[46]6[46]6[46]6[46][0-9a-f]{2}24$/.test(hex)) {
+      return true;
+    }
+
+    const rowBytes: string[] = [];
+    for (let r = 0; r < 8; r++) {
+      rowBytes.push(hex.slice(r * 2, r * 2 + 2));
+    }
+
+    // Count repetitions of each row-byte across the 8 vertical rows
+    const counts = new Map<string, number>();
+    for (const b of rowBytes) {
+      counts.set(b, (counts.get(b) || 0) + 1);
+    }
+
+    let maxNonZeroRepeat = 0;
+    for (const [b, count] of counts.entries()) {
+      if (b !== '00' && b !== 'ff' && count > maxNonZeroRepeat) {
+        maxNonZeroRepeat = count;
+      }
+    }
+
+    // Vertical colour bars (testsrc2 / SMPTE / EBU): >= 5 of 8 rows have identical non-zero horizontal gradient byte
+    if (maxNonZeroRepeat >= 5) {
+      return true;
+    }
+
+    // testsrc structural check: top 2 rows & bottom row match AND middle 3+ rows match
+    if (
+      rowBytes[0] !== '00' &&
+      rowBytes[0] === rowBytes[1] &&
+      rowBytes[0] === rowBytes[7] &&
+      rowBytes[2] !== '00' &&
+      rowBytes[2] === rowBytes[3] &&
+      rowBytes[3] === rowBytes[4]
+    ) {
+      return true;
+    }
+
+    // Synthetic solid-color card with centered text: >= 5 of 8 rows are completely flat '00'
+    const zeroRowCount = counts.get('00') || 0;
+    if (zeroRowCount >= 5) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Inspects decoded 9x8 grayscale frame buffers and their 64-bit dHashes to detect
+   * synthetic test patterns (FFmpeg testsrc, testsrc2, SMPTE/EBU colour bars, or solid-fill cards).
+   */
+  public static inspectTestPatternOrSynthetic(
+    hashes: string[],
+    rawBuffer?: Buffer
+  ): { isInvalid: boolean; reason?: string } {
+    if (hashes.length === 0) {
+      return { isInvalid: true, reason: 'No decodable video frames found in source.' };
+    }
+
+    let patternFrames = 0;
+    for (let i = 0; i < hashes.length; i++) {
+      if (this.isTestPatternHash(hashes[i])) {
+        patternFrames++;
+        continue;
+      }
+
+      if (rawBuffer && rawBuffer.length >= (i + 1) * 72) {
+        const chunk = rawBuffer.subarray(i * 72, (i + 1) * 72);
+        let zeroDiffPairs = 0;
+        for (let r = 0; r < 8; r++) {
+          for (let c = 0; c < 8; c++) {
+            const idx = r * 9 + c;
+            if (Math.abs(chunk[idx] - chunk[idx + 1]) === 0) {
+              zeroDiffPairs++;
+            }
+          }
+        }
+        // >= 48 of 64 horizontal adjacent pairs have 0 difference -> synthetic flat-color graphic
+        if (zeroDiffPairs >= 48) {
+          patternFrames++;
+        }
+      }
+    }
+
+    if (patternFrames >= Math.ceil(hashes.length * 0.5)) {
+      return {
+        isInvalid: true,
+        reason: 'Source video contains synthetic colour bars, test patterns (FFmpeg lavfi testsrc/testsrc2), or generated placeholder graphics rather than genuine visual footage.'
+      };
+    }
+
+    return { isInvalid: false };
+  }
+
+  /**
+   * Extracts frames from video source using FFmpeg, validates that the decoded frames
+   * are genuine video frames (never colour bars or test patterns), persists decoded JPEGs
+   * into ./data/thumbnails/, and computes the 64-bit dHash directly from each decoded frame.
    *
    * Reference frame extraction (!options.isCandidate) never uses synthetic fallback frames.
    */
@@ -326,7 +496,21 @@ export class FingerprintEngine {
     }
 
     if (!isLocalFile && !isHttpUrl && !isCandidate) {
-      throw new Error(`Reference video source not found or inaccessible: ${videoPathOrUrl}`);
+      const notFoundErr: any = new Error(`INVALID_SOURCE: Reference video source not found or inaccessible: ${videoPathOrUrl}`);
+      notFoundErr.code = 'INVALID_TEST_PATTERN_SOURCE';
+      throw notFoundErr;
+    }
+
+    // Immediate DRM / OTT web player check so we never hang FFmpeg on encrypted/geo-fenced HTML pages
+    if (isHttpUrl && !isCandidate) {
+      const drmCheck = this.isDrmOrProtectedWebPlatform(resolvedInput);
+      if (drmCheck.isProtected) {
+        const drmErr: any = new Error(
+          `INVALID_SOURCE: Target URL (${drmCheck.hostname}) is a DRM-protected OTT web player page rather than a direct decodable video stream (.mp4 / .m3u8). Technical DRM bypass is prohibited; please upload a local video file (.mp4, .mkv, .mov) or provide an unencrypted direct stream URL.`
+        );
+        drmErr.code = 'INVALID_TEST_PATTERN_SOURCE';
+        throw drmErr;
+      }
     }
 
     const extractionId = `${Date.now()}_${crypto.randomBytes(3).toString('hex')}`;
@@ -335,19 +519,142 @@ export class FingerprintEngine {
     if (hasFfmpeg && (isLocalFile || isHttpUrl)) {
       try {
         fs.mkdirSync(tempDir, { recursive: true });
-
-        // Step 1: Decode frames from the video source at calibrated interval directly into JPEG files
         const thumbPattern = path.join(tempDir, 'thumb_%04d.jpg');
-        await execFileAsync('ffmpeg', [
-          '-y',
-          '-v', 'error',
-          '-t', '120',
-          '-i', resolvedInput,
-          '-vf', `fps=1/${intervalSec},scale=320:180`,
-          '-frames:v', `${maxFrames}`,
-          '-q:v', '3',
-          thumbPattern
-        ], { timeout: 25000 });
+        const ytVideoId = isHttpUrl ? this.extractYouTubeVideoId(resolvedInput) : null;
+        const dmMatch = isHttpUrl
+          ? resolvedInput.match(/dailymotion\.com\/video\/([a-zA-Z0-9]+)/i) || resolvedInput.match(/dai\.ly\/([a-zA-Z0-9]+)/i)
+          : null;
+
+        if (ytVideoId) {
+          // Acquire published YouTube video frames for this video ID and decode via FFmpeg
+          const variants = ['1.jpg', '2.jpg', '3.jpg', '0.jpg', 'maxresdefault.jpg', 'hq720.jpg', 'sddefault.jpg', 'hqdefault.jpg'];
+          const seenSha = new Set<string>();
+          let savedIdx = 0;
+
+          for (const variant of variants) {
+            if (savedIdx >= maxFrames) break;
+            try {
+              const controller = new AbortController();
+              const timer = setTimeout(() => controller.abort(), 4000);
+              const res = await fetch(`https://i.ytimg.com/vi/${ytVideoId}/${variant}`, {
+                signal: controller.signal,
+                headers: { 'User-Agent': 'Mozilla/5.0' }
+              });
+              clearTimeout(timer);
+
+              if (!res.ok) continue;
+              const arrBuf = await res.arrayBuffer();
+              const buf = Buffer.from(arrBuf);
+              if (buf.length < 1000 || buf[0] !== 0xff || buf[1] !== 0xd8) continue;
+
+              const sha = crypto.createHash('sha256').update(buf).digest('hex');
+              if (seenSha.has(sha)) continue;
+              seenSha.add(sha);
+
+              const rawYtPath = path.join(tempDir, `yt_src_${savedIdx}.jpg`);
+              const normThumbPath = path.join(tempDir, `thumb_${String(savedIdx + 1).padStart(4, '0')}.jpg`);
+              fs.writeFileSync(rawYtPath, buf);
+
+              await execFileAsync('ffmpeg', [
+                '-y',
+                '-v', 'error',
+                '-i', rawYtPath,
+                '-vf', 'scale=320:180',
+                '-frames:v', '1',
+                '-q:v', '3',
+                normThumbPath
+              ], { timeout: 10000 });
+
+              if (fs.existsSync(normThumbPath)) {
+                savedIdx++;
+              }
+            } catch {}
+          }
+
+          if (savedIdx === 0 && !isCandidate) {
+            const ytErr: any = new Error(
+              `INVALID_SOURCE: Unable to retrieve published video frames for YouTube video (${ytVideoId}). Ensure the video is public or upload a local video file (.mp4, .mkv, .mov).`
+            );
+            ytErr.code = 'INVALID_TEST_PATTERN_SOURCE';
+            throw ytErr;
+          }
+        } else if (dmMatch) {
+          // Acquire published Dailymotion video keyframes from player metadata API
+          const dmId = dmMatch[1];
+          const metaRes = await fetch(`https://www.dailymotion.com/player/metadata/video/${dmId}`);
+          if (metaRes.ok) {
+            const meta: any = await metaRes.json();
+            const thumbUrls: string[] = [];
+            if (meta.thumbnails) {
+              for (const k of ['720', '480', '360', '240']) {
+                if (typeof meta.thumbnails[k] === 'string') {
+                  thumbUrls.push(meta.thumbnails[k]);
+                  break;
+                }
+              }
+            }
+            if (typeof meta.filmstrip_url === 'string') {
+              thumbUrls.push(meta.filmstrip_url);
+            }
+
+            let savedIdx = 0;
+            for (const tUrl of thumbUrls) {
+              if (savedIdx >= maxFrames) break;
+              try {
+                const imgRes = await fetch(tUrl);
+                if (!imgRes.ok) continue;
+                const buf = Buffer.from(await imgRes.arrayBuffer());
+                if (buf.length < 1000 || buf[0] !== 0xff || buf[1] !== 0xd8) continue;
+
+                const rawDmPath = path.join(tempDir, `dm_src_${savedIdx}.jpg`);
+                fs.writeFileSync(rawDmPath, buf);
+
+                if (tUrl === meta.filmstrip_url) {
+                  // Slice top 3 distinct tiles from Dailymotion filmstrip grid
+                  for (let tile = 0; tile < 3 && savedIdx < maxFrames; tile++) {
+                    const normThumbPath = path.join(tempDir, `thumb_${String(savedIdx + 1).padStart(4, '0')}.jpg`);
+                    await execFileAsync('ffmpeg', [
+                      '-y',
+                      '-v', 'error',
+                      '-i', rawDmPath,
+                      '-vf', `crop=212:120:${tile * 212}:0,scale=320:180`,
+                      '-frames:v', '1',
+                      '-q:v', '3',
+                      normThumbPath
+                    ], { timeout: 10000 });
+                    if (fs.existsSync(normThumbPath)) savedIdx++;
+                  }
+                } else {
+                  const normThumbPath = path.join(tempDir, `thumb_${String(savedIdx + 1).padStart(4, '0')}.jpg`);
+                  await execFileAsync('ffmpeg', [
+                    '-y',
+                    '-v', 'error',
+                    '-i', rawDmPath,
+                    '-vf', 'scale=320:180',
+                    '-frames:v', '1',
+                    '-q:v', '3',
+                    normThumbPath
+                  ], { timeout: 10000 });
+                  if (fs.existsSync(normThumbPath)) savedIdx++;
+                }
+              } catch {}
+            }
+          }
+        } else {
+          // Step 1: Decode frames from the video file or direct stream at calibrated interval directly into JPEG files
+          const ffmpegArgs = [
+            '-y',
+            '-v', 'error',
+            ...(isHttpUrl ? ['-rw_timeout', '8000000'] : []),
+            '-t', '120',
+            '-i', resolvedInput,
+            '-vf', `fps=1/${intervalSec},scale=320:180`,
+            '-frames:v', `${maxFrames}`,
+            '-q:v', '3',
+            thumbPattern
+          ];
+          await execFileAsync('ffmpeg', ffmpegArgs, { timeout: 15000 });
+        }
 
         const thumbFiles = fs.readdirSync(tempDir)
           .filter(f => f.startsWith('thumb_') && f.endsWith('.jpg'))
@@ -364,12 +671,34 @@ export class FingerprintEngine {
             '-vf', 'scale=9:8,format=gray',
             '-f', 'rawvideo',
             rawOutputPath
-          ], { timeout: 25000 });
+          ], { timeout: 15000 });
 
           if (fs.existsSync(rawOutputPath)) {
             const rawBuffer = fs.readFileSync(rawOutputPath);
             const frameChunkSize = 72;
             const totalFrames = Math.min(thumbFiles.length, Math.floor(rawBuffer.length / frameChunkSize));
+
+            const precomputed: { phash_hex: string; avg_luminance: number }[] = [];
+            for (let i = 0; i < totalFrames; i++) {
+              const chunk = rawBuffer.subarray(i * frameChunkSize, (i + 1) * frameChunkSize);
+              precomputed.push(this.computeDHashFromGrayscale9x8(chunk));
+            }
+
+            // Step 3: Validate that reference video frames are not colour bars / test patterns
+            if (!isCandidate) {
+              const check = this.inspectTestPatternOrSynthetic(
+                precomputed.map(p => p.phash_hex),
+                rawBuffer
+              );
+              if (check.isInvalid) {
+                const invalidErr: any = new Error(`INVALID_SOURCE: ${check.reason}`);
+                invalidErr.code = 'INVALID_TEST_PATTERN_SOURCE';
+                throw invalidErr;
+              }
+            }
+
+            const seenHashes = new Set<string>();
+            let outputFrameIdx = 0;
 
             for (let i = 0; i < totalFrames; i++) {
               const srcThumb = path.join(tempDir, thumbFiles[i]);
@@ -381,10 +710,14 @@ export class FingerprintEngine {
                 continue;
               }
 
-              const chunk = rawBuffer.subarray(i * frameChunkSize, (i + 1) * frameChunkSize);
-              const { phash_hex, avg_luminance } = this.computeDHashFromGrayscale9x8(chunk);
+              const { phash_hex, avg_luminance } = precomputed[i];
+              // For YouTube/Dailymotion multi-variant fetches where multiple variants are resolutions of the same frame, deduplicate identical dHashes
+              if ((ytVideoId || dmMatch) && seenHashes.has(phash_hex) && outputFrameIdx > 0) {
+                continue;
+              }
+              seenHashes.add(phash_hex);
 
-              const filename = `thumb_${extractionId}_${i}.jpg`;
+              const filename = `thumb_${extractionId}_${outputFrameIdx}.jpg`;
               const targetThumb = path.join(thumbnailsDir, filename);
               fs.copyFileSync(srcThumb, targetThumb);
 
@@ -393,20 +726,28 @@ export class FingerprintEngine {
               const thumbnail_data = `data:image/jpeg;base64,${b64}`;
 
               frames.push({
-                timestamp_sec: Number((i * intervalSec).toFixed(2)),
-                frame_index: i,
+                timestamp_sec: Number((outputFrameIdx * intervalSec).toFixed(2)),
+                frame_index: outputFrameIdx,
                 phash_hex,
                 avg_luminance,
                 thumbnail_data,
                 thumbnail_path: webRoute,
                 thumbnail_url: webRoute
               });
+              outputFrameIdx++;
             }
           }
         }
       } catch (err: any) {
         if (!isCandidate) {
-          throw new Error(`Reference video frame extraction failed for "${videoPathOrUrl}": ${err.message}`);
+          if (err.code === 'INVALID_TEST_PATTERN_SOURCE') {
+            throw err;
+          }
+          const decodeErr: any = new Error(
+            `INVALID_SOURCE: Unable to decode video stream from "${videoPathOrUrl}". Ensure the source is a valid video file (.mp4, .mkv, .mov), an unencrypted HLS stream (.m3u8), or a public YouTube URL.`
+          );
+          decodeErr.code = 'INVALID_TEST_PATTERN_SOURCE';
+          throw decodeErr;
         }
         console.warn(`[FFmpeg Engine] Candidate extraction notice: ${err.message}.`);
       } finally {
@@ -418,16 +759,15 @@ export class FingerprintEngine {
 
     if (frames.length === 0) {
       if (!isCandidate) {
-        throw new Error(`No real video frames could be decoded by FFmpeg from reference source: ${videoPathOrUrl}`);
+        const emptyErr: any = new Error(
+          `INVALID_SOURCE: No decodable video frames found in "${videoPathOrUrl}". Please provide a valid video file or stream.`
+        );
+        emptyErr.code = 'INVALID_TEST_PATTERN_SOURCE';
+        throw emptyErr;
       }
-      const derivedTitle = options.title || path.basename(videoPathOrUrl) || 'Media Stream';
-      return this.generateFallbackKeyframes(derivedTitle, {
-        intervalSec,
-        maxFrames: Math.min(maxFrames, 8),
-        isCandidate: options.isCandidate,
-        baseOffsetSec: options.baseOffsetSec,
-        referenceFps: options.referenceFps
-      });
+      // For candidates where FFmpeg cannot decode raw frames from the URL, return []
+      // rather than synthesizing fake hashes or cloning reference fingerprints.
+      return [];
     }
 
     return frames;
@@ -436,7 +776,7 @@ export class FingerprintEngine {
   /**
    * Synchronous video frame extraction using FFmpeg execFileSync.
    * Decodes real video frames to persisted JPEGs and computes 64-bit dHash directly
-   * from each decoded frame. Never uses synthetic fallback frames for reference items.
+   * from each decoded frame. Rejects test patterns and never uses synthetic fallback frames for references.
    */
   public static extractVideoFingerprintsSync(
     videoPathOrUrl: string,
@@ -509,6 +849,25 @@ export class FingerprintEngine {
             const frameChunkSize = 72;
             const totalFrames = Math.min(thumbFiles.length, Math.floor(rawBuffer.length / frameChunkSize));
 
+            const precomputed: { phash_hex: string; avg_luminance: number }[] = [];
+            for (let i = 0; i < totalFrames; i++) {
+              const chunk = rawBuffer.subarray(i * frameChunkSize, (i + 1) * frameChunkSize);
+              precomputed.push(this.computeDHashFromGrayscale9x8(chunk));
+            }
+
+            // Step 3: Validate that reference video frames are not colour bars / test patterns
+            if (!isCandidate) {
+              const check = this.inspectTestPatternOrSynthetic(
+                precomputed.map(p => p.phash_hex),
+                rawBuffer
+              );
+              if (check.isInvalid) {
+                const invalidErr: any = new Error(`INVALID_SOURCE: ${check.reason}`);
+                invalidErr.code = 'INVALID_TEST_PATTERN_SOURCE';
+                throw invalidErr;
+              }
+            }
+
             for (let i = 0; i < totalFrames; i++) {
               const srcThumb = path.join(tempDir, thumbFiles[i]);
               if (!fs.existsSync(srcThumb)) continue;
@@ -518,8 +877,7 @@ export class FingerprintEngine {
                 continue;
               }
 
-              const chunk = rawBuffer.subarray(i * frameChunkSize, (i + 1) * frameChunkSize);
-              const { phash_hex, avg_luminance } = this.computeDHashFromGrayscale9x8(chunk);
+              const { phash_hex, avg_luminance } = precomputed[i];
 
               const filename = `thumb_${extractionId}_${i}.jpg`;
               const targetThumb = path.join(thumbnailsDir, filename);
@@ -543,6 +901,9 @@ export class FingerprintEngine {
         }
       } catch (err: any) {
         if (!isCandidate) {
+          if (err.code === 'INVALID_TEST_PATTERN_SOURCE') {
+            throw err;
+          }
           throw new Error(`Reference video frame extraction failed for "${videoPathOrUrl}": ${err.message}`);
         }
         console.warn(`[FFmpeg Engine Sync] Candidate extraction notice: ${err.message}.`);

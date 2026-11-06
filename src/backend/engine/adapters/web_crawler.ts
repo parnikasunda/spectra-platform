@@ -8,6 +8,7 @@
 
 import { SourceAdapter, DiscoveredItem, MediaAcquisitionResult, AdapterDiagnostic } from './types.js';
 import { YouTubeAdapter } from './youtube.js';
+import { CandidateResearchEngine } from '../candidateResearch.js';
 
 export class WebCrawlerAdapter implements SourceAdapter {
   public id = 'adapter_web_crawler';
@@ -132,7 +133,7 @@ export class WebCrawlerAdapter implements SourceAdapter {
 
   public async discover(
     query: string,
-    options: { maxResults?: number; referenceTitle?: string } = {}
+    options: { maxResults?: number; referenceTitle?: string; keywordCombinations?: string[] } = {}
   ): Promise<DiscoveredItem[]> {
     const limit = options.maxResults || 8;
     const cleanQuery = query.trim();
@@ -148,46 +149,98 @@ export class WebCrawlerAdapter implements SourceAdapter {
       return [];
     }
 
-    const searchResult = await WebCrawlerAdapter.searchLiveWeb(`${cleanQuery} watch live stream video`, limit * 2);
+    const queriesToRun = Array.from(
+      new Set([
+        `${cleanQuery} watch live stream video`,
+        ...(options.keywordCombinations || []).slice(0, 1)
+      ])
+    ).slice(0, 2);
+
     const results: DiscoveredItem[] = [];
+    const seenUrls = new Set<string>();
+    let lastProviderUsed = 'DuckDuckGo Live Web Search';
+    let lastError: string | undefined;
 
-    for (const item of searchResult.items) {
-      const relevance = YouTubeAdapter.computeRelevanceScore(item.title, cleanQuery, options.referenceTitle);
-      if (relevance < 0.15) continue;
-
-      const uLower = item.url.toLowerCase();
-      const isDirectHls = uLower.endsWith('.m3u8');
-      const isDirectMp4 = uLower.endsWith('.mp4');
-
-      results.push({
-        url: item.url,
-        title: item.title,
-        platform: item.domain,
-        sourceCategory: isDirectHls || isDirectMp4 ? 'DIRECT_STREAM' : 'OTHER',
-        assetKind: isDirectHls || isDirectMp4 ? 'VERIFIED_VIDEO_ASSET' : 'DISCOVERED_PAGE',
-        suggestedType: isDirectHls ? 'HLS_M3U8' : (isDirectMp4 ? 'MP4' : 'HTML_PLAYER'),
-        domain: item.domain,
-        isLive: isDirectHls,
-        relevanceScore: relevance,
-        metadata: {
-          searchQuery: cleanQuery,
-          providerUsed: searchResult.providerUsed,
-          relevanceScore: relevance
-        }
-      });
-
+    for (const qStr of queriesToRun) {
       if (results.length >= limit) break;
+      const searchResult = await WebCrawlerAdapter.searchLiveWeb(qStr, limit * 2);
+      lastProviderUsed = searchResult.providerUsed;
+      if (searchResult.error) lastError = searchResult.error;
+
+      for (const item of searchResult.items) {
+        const genericCheck = CandidateResearchEngine.isGenericPlatformTestVideo(
+          `${item.title} ${item.url}`,
+          options.referenceTitle || cleanQuery
+        );
+        if (genericCheck.isGenericTest) continue;
+
+        const relevance = YouTubeAdapter.computeRelevanceScore(item.title, cleanQuery, options.referenceTitle);
+        if (relevance < 0.25) continue;
+
+        const uLower = item.url.toLowerCase();
+        if (seenUrls.has(uLower)) continue;
+        seenUrls.add(uLower);
+
+        const isDirectHls = uLower.endsWith('.m3u8');
+        const isDirectMp4 = uLower.endsWith('.mp4') || uLower.endsWith('.webm');
+        const isImage = /\.(jpg|jpeg|png|webp|gif|bmp)(\?|$)/i.test(uLower);
+        const isArticle =
+          /\/(news|article|articles|blog|review|reviews|recap|story|press)\b/i.test(uLower) ||
+          /\b(review|recap|news|explained|preview|report)\b/i.test(item.title.toLowerCase());
+
+        const candidateClassification = isDirectHls || isDirectMp4
+          ? 'VIDEO_ASSET'
+          : isImage
+          ? 'IMAGE'
+          : isArticle
+          ? 'ARTICLE'
+          : 'GENERAL_WEBPAGE';
+
+        const assetKind = isDirectHls || isDirectMp4
+          ? 'VERIFIED_VIDEO_ASSET'
+          : isImage
+          ? 'IMAGE'
+          : isArticle
+          ? 'ARTICLE'
+          : 'DISCOVERED_PAGE';
+
+        results.push({
+          url: item.url,
+          originalUrl: item.url,
+          finalUrl: item.url,
+          finalDomain: item.domain,
+          referringPage: `${searchResult.providerUsed} (Query: "${qStr}")`,
+          matchedKeywords: [qStr],
+          crawlStatus: 'DISCOVERED',
+          candidateClassification,
+          title: item.title,
+          platform: item.domain,
+          sourceCategory: isDirectHls || isDirectMp4 ? 'DIRECT_STREAM' : 'OTHER',
+          assetKind,
+          suggestedType: isDirectHls ? 'HLS_M3U8' : (isDirectMp4 ? 'MP4' : 'HTML_PLAYER'),
+          domain: item.domain,
+          isLive: isDirectHls,
+          relevanceScore: relevance,
+          metadata: {
+            searchQuery: qStr,
+            providerUsed: searchResult.providerUsed,
+            relevanceScore: relevance
+          }
+        });
+
+        if (results.length >= limit) break;
+      }
     }
 
     this.lastDiagnostic = {
       adapterId: this.id,
       adapterName: this.name,
       sourceCategory: this.sourceCategory,
-      status: searchResult.error ? 'NETWORK_ERROR' : (results.length > 0 ? 'LIVE_OK' : 'NO_RESULTS'),
+      status: lastError && results.length === 0 ? 'NETWORK_ERROR' : (results.length > 0 ? 'LIVE_OK' : 'NO_RESULTS'),
       candidatesFound: results.length,
-      message: searchResult.error
-        ? `${searchResult.providerUsed} error: ${searchResult.error}`
-        : `${searchResult.providerUsed}: discovered ${results.length} relevant web page(s).`
+      message: lastError && results.length === 0
+        ? `${lastProviderUsed} error: ${lastError}`
+        : `${lastProviderUsed}: searched ${queriesToRun.length} query variation(s), discovered ${results.length} relevant web page(s).`
     };
 
     return results;
@@ -209,10 +262,35 @@ export class WebCrawlerAdapter implements SourceAdapter {
       domain = new URL(targetUrl).hostname.replace(/^www\./, '').toLowerCase();
     } catch {}
 
+    // Compliance safeguard: Never automatically download torrent payloads or execute untrusted files
+    if (
+      uLower.startsWith('magnet:') ||
+      /\.(torrent|exe|msi|apk|dmg|bat|sh|scr)(\?|$)/i.test(uLower)
+    ) {
+      log(`[Compliance Safeguard] Target is a torrent payload or untrusted executable (${targetUrl}). Automatic download or execution is strictly prohibited.`);
+      return {
+        accessible: false,
+        pipelineStatus: 'UNSUPPORTED',
+        httpStatus: 0,
+        latencyMs: Date.now() - startTime,
+        mediaType: 'UNKNOWN',
+        finalUrl: targetUrl,
+        finalDomain: domain,
+        redirected: false,
+        crawlStatus: 'TORRENT_PAYLOAD_SKIPPED',
+        candidateClassification: 'GENERAL_WEBPAGE',
+        platform: domain,
+        headers: {},
+        technicalLogs: logs,
+        extractionNotice: 'Torrent payload / untrusted binary skipped per security compliance policy.'
+      };
+    }
+
     try {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), options.timeoutMs || 5000);
       const res = await fetch(targetUrl, {
+        redirect: 'follow',
         headers: {
           'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
           'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
@@ -223,20 +301,34 @@ export class WebCrawlerAdapter implements SourceAdapter {
 
       const httpStatus = res.status;
       const latencyMs = Date.now() - startTime;
+      const finalUrl = res.url || targetUrl;
+      let finalDomain = domain;
+      try {
+        finalDomain = new URL(finalUrl).hostname.replace(/^www\./, '').toLowerCase();
+      } catch {}
+      const redirected = Boolean(res.redirected || finalUrl.replace(/\/$/, '').toLowerCase() !== targetUrl.replace(/\/$/, '').toLowerCase());
+
       const headers: Record<string, string> = {};
       res.headers.forEach((v, k) => { headers[k] = v; });
 
-      log(`Web target returned HTTP ${httpStatus} (${latencyMs}ms)`);
+      log(
+        `Web target returned HTTP ${httpStatus} (${latencyMs}ms)${redirected ? ` [Redirected -> ${finalUrl} (${finalDomain})]` : ''}`
+      );
 
-      if (httpStatus === 401 || httpStatus === 403) {
-        log(`Target returned HTTP ${httpStatus} (Forbidden / Anti-bot or Auth wall).`);
+      if (httpStatus === 401 || httpStatus === 403 || httpStatus === 451) {
+        log(`Target returned HTTP ${httpStatus} (Forbidden / Anti-bot or Auth wall). Respecting access restriction.`);
         return {
           accessible: false,
           pipelineStatus: 'BLOCKED',
           httpStatus,
           latencyMs,
           mediaType: 'UNKNOWN',
-          platform: domain,
+          finalUrl,
+          finalDomain,
+          redirected,
+          crawlStatus: httpStatus === 401 || httpStatus === 451 ? 'ACCESS_RESTRICTED' : 'BLOCKED',
+          candidateClassification: 'GENERAL_WEBPAGE',
+          platform: finalDomain,
           headers,
           technicalLogs: logs,
           extractionNotice: `Target server returned HTTP ${httpStatus} (Access Blocked).`
@@ -251,7 +343,12 @@ export class WebCrawlerAdapter implements SourceAdapter {
           httpStatus,
           latencyMs,
           mediaType: 'UNKNOWN',
-          platform: domain,
+          finalUrl,
+          finalDomain,
+          redirected,
+          crawlStatus: 'UNREACHABLE',
+          candidateClassification: 'GENERAL_WEBPAGE',
+          platform: finalDomain,
           headers,
           technicalLogs: logs,
           extractionNotice: `Target server returned HTTP ${httpStatus}.`
@@ -259,6 +356,26 @@ export class WebCrawlerAdapter implements SourceAdapter {
       }
 
       const contentType = (headers['content-type'] || '').toLowerCase();
+
+      if (contentType.startsWith('image/')) {
+        log(`Target resolved to static image asset (${contentType}), not a video stream.`);
+        return {
+          accessible: true,
+          pipelineStatus: 'REACHABLE',
+          httpStatus,
+          latencyMs,
+          mediaType: 'UNKNOWN',
+          finalUrl,
+          finalDomain,
+          redirected,
+          crawlStatus: redirected ? 'REDIRECTED_ACCESSIBLE' : 'CRAWLED_OK',
+          candidateClassification: 'IMAGE',
+          platform: finalDomain,
+          headers,
+          technicalLogs: logs,
+          extractionNotice: 'Static image asset (not a video asset).'
+        };
+      }
 
       if (isDirectHls || contentType.includes('mpegurl')) {
         const bodyText = await res.text().catch(() => '');
@@ -270,7 +387,12 @@ export class WebCrawlerAdapter implements SourceAdapter {
             httpStatus,
             latencyMs,
             mediaType: 'HLS_M3U8',
-            platform: domain,
+            finalUrl,
+            finalDomain,
+            redirected,
+            crawlStatus: 'ACCESS_RESTRICTED',
+            candidateClassification: 'VIDEO_ASSET',
+            platform: finalDomain,
             drmScheme: 'SAMPLE-AES / FairPlay / Widevine',
             headers,
             technicalLogs: logs,
@@ -284,8 +406,13 @@ export class WebCrawlerAdapter implements SourceAdapter {
           httpStatus,
           latencyMs,
           mediaType: 'HLS_M3U8',
-          resolvedMediaUrl: targetUrl,
-          platform: domain,
+          resolvedMediaUrl: finalUrl,
+          finalUrl,
+          finalDomain,
+          redirected,
+          crawlStatus: redirected ? 'REDIRECTED_ACCESSIBLE' : 'CRAWLED_OK',
+          candidateClassification: 'VERIFIED_VIDEO_ASSET',
+          platform: finalDomain,
           headers,
           technicalLogs: logs
         };
@@ -299,8 +426,13 @@ export class WebCrawlerAdapter implements SourceAdapter {
           httpStatus,
           latencyMs,
           mediaType: 'MP4',
-          resolvedMediaUrl: targetUrl,
-          platform: domain,
+          resolvedMediaUrl: finalUrl,
+          finalUrl,
+          finalDomain,
+          redirected,
+          crawlStatus: redirected ? 'REDIRECTED_ACCESSIBLE' : 'CRAWLED_OK',
+          candidateClassification: 'VERIFIED_VIDEO_ASSET',
+          platform: finalDomain,
           headers,
           technicalLogs: logs
         };
@@ -336,8 +468,13 @@ export class WebCrawlerAdapter implements SourceAdapter {
           latencyMs,
           mediaType: streamUrl.toLowerCase().includes('.m3u8') ? 'HLS_M3U8' : 'MP4',
           resolvedMediaUrl: streamUrl,
+          finalUrl,
+          finalDomain,
+          redirected,
+          crawlStatus: redirected ? 'REDIRECTED_ACCESSIBLE' : 'CRAWLED_OK',
+          candidateClassification: 'VERIFIED_VIDEO_ASSET',
           pageTitle,
-          platform: domain,
+          platform: finalDomain,
           headers,
           technicalLogs: logs,
           extractionNotice: `Extracted direct media stream (${streamUrl}) from HTML page.`
@@ -352,23 +489,38 @@ export class WebCrawlerAdapter implements SourceAdapter {
           httpStatus,
           latencyMs,
           mediaType: 'HTML_PLAYER',
+          finalUrl,
+          finalDomain,
+          redirected,
+          crawlStatus: redirected ? 'REDIRECTED_ACCESSIBLE' : 'CRAWLED_OK',
+          candidateClassification: 'VIDEO_ASSET',
           pageTitle,
-          platform: domain,
+          platform: finalDomain,
           headers,
           technicalLogs: logs,
           extractionNotice: 'Reachable web page with embedded player container; unverified without direct stream extraction.'
         };
       }
 
-      log(`HTML web page is reachable (HTTP 200), but no direct video stream or player container was detected on the page.`);
+      const isArticlePage =
+        /<article\b/i.test(html) ||
+        /property=["']og:type["']\s+content=["']article["']/i.test(html) ||
+        /\/(news|article|blog|review)\b/i.test(finalUrl);
+
+      log(`HTML web page is reachable (HTTP 200), classified as ${isArticlePage ? 'ARTICLE' : 'GENERAL_WEBPAGE'} (no direct video stream).`);
       return {
         accessible: true,
         pipelineStatus: 'REACHABLE',
         httpStatus,
         latencyMs,
         mediaType: 'UNKNOWN',
+        finalUrl,
+        finalDomain,
+        redirected,
+        crawlStatus: redirected ? 'REDIRECTED_ACCESSIBLE' : 'CRAWLED_OK',
+        candidateClassification: isArticlePage ? 'ARTICLE' : 'GENERAL_WEBPAGE',
         pageTitle,
-        platform: domain,
+        platform: finalDomain,
         headers,
         technicalLogs: logs,
         extractionNotice: 'Web page is reachable (HTTP 200) and references the topic, but contains no direct video stream.'
@@ -382,6 +534,11 @@ export class WebCrawlerAdapter implements SourceAdapter {
         httpStatus: 0,
         latencyMs,
         mediaType: 'UNKNOWN',
+        finalUrl: targetUrl,
+        finalDomain: domain,
+        redirected: false,
+        crawlStatus: 'UNREACHABLE',
+        candidateClassification: 'GENERAL_WEBPAGE',
         platform: domain,
         headers: {},
         technicalLogs: logs,

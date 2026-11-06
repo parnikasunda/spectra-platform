@@ -7,6 +7,7 @@
  */
 
 import { SourceAdapter, DiscoveredItem, MediaAcquisitionResult, AdapterDiagnostic } from './types.js';
+import { CandidateResearchEngine } from '../candidateResearch.js';
 
 export class YouTubeAdapter implements SourceAdapter {
   public id = 'adapter_youtube';
@@ -25,33 +26,11 @@ export class YouTubeAdapter implements SourceAdapter {
   }
 
   /**
-   * Computes keyword token overlap between a candidate title and the search query / reference title.
+   * Computes content-aware relevance score between a candidate title and the search query / reference title,
+   * considering series/artist/event identity, season/episode numbers, release years, and word boundaries.
    */
   public static computeRelevanceScore(candidateTitle: string, query: string, referenceTitle?: string): number {
-    const stopWords = new Set([
-      'the', 'and', 'for', 'with', 'from', 'that', 'this', 'live', 'stream', 'video',
-      'full', 'watch', 'online', 'free', 'official', 'youtube', 'mp4', 'm3u8', 'hd', '4k'
-    ]);
-    const targetText = `${query} ${referenceTitle || ''}`.toLowerCase();
-    const tokens = Array.from(
-      new Set(
-        targetText
-          .replace(/[^\w\s]/g, ' ')
-          .split(/\s+/)
-          .filter(t => t.length >= 2 && !stopWords.has(t))
-      )
-    );
-
-    if (tokens.length === 0) return 0.5;
-
-    const candLower = candidateTitle.toLowerCase();
-    let matched = 0;
-    for (const token of tokens) {
-      if (candLower.includes(token)) {
-        matched++;
-      }
-    }
-    return Number((matched / tokens.length).toFixed(2));
+    return CandidateResearchEngine.computeTargetRelevanceScore(candidateTitle, query, referenceTitle);
   }
 
   /**
@@ -123,6 +102,8 @@ export class YouTubeAdapter implements SourceAdapter {
       const contents =
         data?.contents?.twoColumnSearchResultsRenderer?.primaryContents?.sectionListRenderer?.contents || [];
 
+      const rawCandidates: DiscoveredItem[] = [];
+
       for (const section of contents) {
         const items = section?.itemSectionRenderer?.contents || [];
         for (const item of items) {
@@ -140,6 +121,15 @@ export class YouTubeAdapter implements SourceAdapter {
             vr.longBylineText?.runs?.[0]?.text ||
             'YouTube Channel';
 
+          const snippetText = (
+            vr.detailedMetadataSnippets?.[0]?.snippetText?.runs ||
+            vr.descriptionSnippet?.runs ||
+            []
+          )
+            .map((r: any) => r.text || '')
+            .join(' ')
+            .trim();
+
           const isLive = Boolean(
             (vr.badges || []).some((b: any) =>
               String(b?.metadataBadgeRenderer?.style || '').includes('LIVE') ||
@@ -150,13 +140,24 @@ export class YouTubeAdapter implements SourceAdapter {
             )
           );
 
-          const relevance = YouTubeAdapter.computeRelevanceScore(rawTitle, cleanQuery, options.referenceTitle);
-          // Require plausible relevance (at least 1 meaningful keyword match or >= 0.20 score)
-          if (relevance < 0.15) continue;
+          const candidateWatchUrl = `https://www.youtube.com/watch?v=${videoId}`;
+          const genericCheck = CandidateResearchEngine.isGenericPlatformTestVideo(
+            `${rawTitle} ${candidateWatchUrl}`,
+            options.referenceTitle || cleanQuery
+          );
+          if (genericCheck.isGenericTest) continue;
+
+          const relevance = YouTubeAdapter.computeRelevanceScore(
+            `${rawTitle} ${snippetText}`,
+            cleanQuery,
+            options.referenceTitle
+          );
+          // Require plausible relevance to the complete target (filter out unrelated shows)
+          if (relevance < 0.25) continue;
 
           seenVideoIds.add(videoId);
-          results.push({
-            url: `https://www.youtube.com/watch?v=${videoId}`,
+          rawCandidates.push({
+            url: candidateWatchUrl,
             title: rawTitle,
             platform: 'YouTube',
             sourceCategory: 'YOUTUBE',
@@ -168,16 +169,17 @@ export class YouTubeAdapter implements SourceAdapter {
             metadata: {
               videoId,
               channelName,
+              descriptionSnippet: snippetText || undefined,
               thumbnailUrl: `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`,
               searchQuery: cleanQuery,
               relevanceScore: relevance
             }
           });
-
-          if (results.length >= limit) break;
         }
-        if (results.length >= limit) break;
       }
+
+      rawCandidates.sort((a, b) => (b.relevanceScore ?? 0) - (a.relevanceScore ?? 0));
+      results.push(...rawCandidates.slice(0, limit));
 
       this.lastDiagnostic = {
         adapterId: this.id,

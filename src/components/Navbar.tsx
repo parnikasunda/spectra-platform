@@ -1,18 +1,18 @@
 /**
- * Argus Anti-Piracy Intelligence & Evidence Platform
+ * SPECTRA Anti-Piracy Intelligence & Evidence Platform
  * Navigation Bar Component
  * Adheres strictly to the 3-Zone Top Bar Contract
  */
 
 import React from 'react';
-import { ShieldCheck, Plus, Sparkles, Trash2 } from 'lucide-react';
+import { ShieldCheck, Plus, Sparkles } from 'lucide-react';
 
 interface NavbarProps {
   currentTab: string;
   onSelectTab: (tab: string) => void;
   onOpenRegisterModal: () => void;
   onLoadSampleSuite: () => void;
-  onResetDb: () => void;
+  onResetDb?: () => void;
   isLoadingSample: boolean;
 }
 
@@ -21,12 +21,11 @@ export const Navbar: React.FC<NavbarProps> = ({
   onSelectTab,
   onOpenRegisterModal,
   onLoadSampleSuite,
-  onResetDb,
   isLoadingSample
 }) => {
   return (
     <header className="sticky top-0 z-40 bg-slate-950/90 backdrop-blur-md border-b border-slate-800/80 px-6 py-3.5">
-      <div className="max-w-7xl mx-auto flex items-center justify-between gap-8">
+      <div className="max-w-[1440px] mx-auto flex items-center justify-between gap-8">
         {/* Zone 1: Brand Wordmark (Single text element) */}
         <div className="flex items-center gap-3 shrink-0">
           <div className="w-8 h-8 rounded bg-gradient-to-br from-cyan-500 to-blue-600 flex items-center justify-center shadow-sm shadow-cyan-500/20">
@@ -37,7 +36,7 @@ export const Navbar: React.FC<NavbarProps> = ({
             className="text-left group cursor-pointer"
           >
             <span className="text-base font-bold tracking-tight text-white whitespace-nowrap block">
-              Argus Forensics
+              SPECTRA
             </span>
             <span className="text-[10px] text-slate-400 font-mono tracking-wider uppercase block">
               Anti-Piracy Intelligence
@@ -120,14 +119,6 @@ export const Navbar: React.FC<NavbarProps> = ({
           >
             <Sparkles className="w-3.5 h-3.5 text-amber-400" />
             <span>Forensic Test Suite</span>
-          </button>
-
-          <button
-            onClick={onResetDb}
-            title="Reset database to clean empty state"
-            className="p-1.5 text-slate-400 hover:text-rose-400 hover:bg-rose-950/30 rounded border border-transparent hover:border-rose-900/40 transition-colors"
-          >
-            <Trash2 className="w-3.5 h-3.5" />
           </button>
 
           <button

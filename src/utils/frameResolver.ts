@@ -78,3 +78,28 @@ export function resolveFrameImageUrl(source?: string | null): string | null {
 export function isAuthenticDecodedFrame(thumb?: string | null): boolean {
   return resolveFrameImageUrl(thumb) !== null;
 }
+
+export function resolveReferenceFrameImageWithFallback(
+  fp: {
+    thumbnail_url?: string | null;
+    thumbnail_path?: string | null;
+    thumbnail_data?: string | null;
+    frame_index?: number;
+    image_available?: boolean;
+  },
+  referenceId?: string
+): string | null {
+  if (!fp) return null;
+  // When the backend has verified that neither the disk JPEG nor base64 thumbnail_data is present,
+  // do not return a dead URL.
+  if (fp.image_available === false) {
+    return null;
+  }
+  const direct = resolveFrameImageUrl(fp.thumbnail_url || fp.thumbnail_path || fp.thumbnail_data);
+  if (direct) return direct;
+  if (referenceId && fp.frame_index !== undefined && fp.frame_index >= 0 && fp.image_available === true) {
+    return `/api/references/${encodeURIComponent(referenceId)}/frames/${fp.frame_index}/image`;
+  }
+  return null;
+}
+

@@ -1,5 +1,5 @@
 /**
- * Argus Anti-Piracy Intelligence & Evidence Platform
+ * SPECTRA Anti-Piracy Intelligence & Evidence Platform
  * Stage C — Candidate Verification Matrix & Diagnostic Inspector
  */
 
@@ -79,7 +79,9 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
   // Quick inspect state
   const [quickUrl, setQuickUrl] = useState('');
   const [quickRefId, setQuickRefId] = useState(
-    references.find(r => r.status === 'REGISTERED')?.id || references[0]?.id || ''
+    references.find(r => (r.status === 'FINGERPRINTED' || r.status === 'REGISTERED') && (r.fingerprint_count || 0) > 0)?.id ||
+    references[0]?.id ||
+    ''
   );
   const [isQuickInspecting, setIsQuickInspecting] = useState(false);
   const [quickInspectResult, setQuickInspectResult] = useState<any | null>(null);
@@ -125,53 +127,175 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
     }
   };
 
+  const [filterIdentity, setFilterIdentity] = useState<string>('ALL');
+
+  const getIdentityRelationship = (c: CandidateItem) =>
+    c.identity_relationship || c.candidate_research?.identity_relationship || 'INSUFFICIENT_METADATA';
+
+  const getResearchScore = (c: CandidateItem) =>
+    c.research_relevance_score ?? c.candidate_research?.research_relevance_score ?? c.metadata_relevance_score ?? 0.5;
+
+  const isConfirmedMatch = (c: CandidateItem) => {
+    const acq = c.acquisition_status || '';
+    const rel = getIdentityRelationship(c);
+    return (
+      c.pipeline_status === 'ANALYZED' &&
+      (acq === 'VERIFIED_PERCEPTUAL_MATCH' || acq === 'ACQUIRED_AND_VERIFIED') &&
+      c.overall_assessment === 'MATCH_FOUND' &&
+      rel !== 'UNRELATED_CONTENT' &&
+      rel !== 'DIFFERENT_EPISODE_OR_ITEM'
+    );
+  };
+
   const filteredCandidates = candidates.filter(c => {
     if (filterReferenceId && c.reference_id !== filterReferenceId) return false;
-    if (filterStatus !== 'ALL' && c.pipeline_status !== filterStatus) return false;
+    if (filterStatus === 'INACCESSIBLE') {
+      if (!['UNREACHABLE', 'BLOCKED', 'DRM_PROTECTED', 'REQUIRES_AUTHENTICATION'].includes(c.pipeline_status)) return false;
+    } else if (filterStatus === 'DUPLICATES') {
+      if ((c.duplicate_count || 1) <= 1) return false;
+    } else if (filterStatus !== 'ALL' && c.pipeline_status !== filterStatus) {
+      return false;
+    }
+
+    const rel = getIdentityRelationship(c);
+    const research = c.candidate_research;
+    if (filterIdentity === 'STRONG_IDENTITY') {
+      if (rel !== 'EXACT_TARGET_MATCH') return false;
+    } else if (filterIdentity === 'POSSIBLE_MATCH') {
+      if (
+        c.overall_assessment !== 'POSSIBLE_MATCH' &&
+        rel !== 'TARGET_SERIES_OR_ARTIST_GENERIC' &&
+        !isConfirmedMatch(c)
+      ) {
+        return false;
+      }
+    } else if (filterIdentity === 'INCOMPLETE_RESEARCH') {
+      if (
+        rel !== 'INSUFFICIENT_METADATA' &&
+        (!research?.missing_metadata || research.missing_metadata.length === 0)
+      ) {
+        return false;
+      }
+    } else if (filterIdentity === 'CONFLICTING_EVIDENCE') {
+      if (
+        rel !== 'DIFFERENT_EPISODE_OR_ITEM' &&
+        (!research?.contradictory_evidence || research.contradictory_evidence.length === 0)
+      ) {
+        return false;
+      }
+    } else if (filterIdentity === 'REJECTED_UNRELATED') {
+      if (rel !== 'UNRELATED_CONTENT' && c.overall_assessment !== 'NO_MATCH_FOUND') return false;
+    }
+
     if (searchQuery) {
       const q = searchQuery.toLowerCase();
       return (
         c.source_url.toLowerCase().includes(q) ||
         c.domain.toLowerCase().includes(q) ||
-        c.discovered_title.toLowerCase().includes(q)
+        c.discovered_title.toLowerCase().includes(q) ||
+        (c.final_domain || '').toLowerCase().includes(q) ||
+        (c.matched_keywords || '').toLowerCase().includes(q) ||
+        (c.candidate_research?.detected_identity?.identity_summary || '').toLowerCase().includes(q)
       );
     }
     return true;
   });
+
+  const getIdentityBadge = (cand: CandidateItem) => {
+    const rel = getIdentityRelationship(cand);
+    switch (rel) {
+      case 'EXACT_TARGET_MATCH':
+        return (
+          <span className="px-1.5 py-0.5 rounded bg-emerald-950/70 border border-emerald-700/70 text-emerald-300 text-[10px] font-mono font-semibold">
+            EXACT TARGET IDENTITY
+          </span>
+        );
+      case 'TARGET_SERIES_OR_ARTIST_GENERIC':
+        return (
+          <span className="px-1.5 py-0.5 rounded bg-cyan-950/70 border border-cyan-700/70 text-cyan-300 text-[10px] font-mono">
+            GENERIC SERIES / ARTIST
+          </span>
+        );
+      case 'DIFFERENT_EPISODE_OR_ITEM':
+        return (
+          <span className="px-1.5 py-0.5 rounded bg-amber-950/70 border border-amber-700/70 text-amber-300 text-[10px] font-mono font-semibold">
+            CONFLICTING ITEM / EPISODE
+          </span>
+        );
+      case 'UNRELATED_CONTENT':
+        return (
+          <span className="px-1.5 py-0.5 rounded bg-rose-950/70 border border-rose-800/70 text-rose-300 text-[10px] font-mono">
+            UNRELATED / REJECTED
+          </span>
+        );
+      default:
+        return (
+          <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-mono">
+            INCOMPLETE METADATA
+          </span>
+        );
+    }
+  };
+
+  const getClassificationBadge = (cand: CandidateItem) => {
+    const cls = cand.candidate_classification || 'GENERAL_WEBPAGE';
+    switch (cls) {
+      case 'VERIFIED_VIDEO_ASSET':
+        return <span className="px-1.5 py-0.5 rounded bg-emerald-950/60 border border-emerald-800/60 text-emerald-300 text-[10px] font-mono">VERIFIED_VIDEO_ASSET</span>;
+      case 'VIDEO_ASSET':
+        return <span className="px-1.5 py-0.5 rounded bg-cyan-950/60 border border-cyan-800/60 text-cyan-300 text-[10px] font-mono">VIDEO_ASSET</span>;
+      case 'ARTICLE':
+        return <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-mono">ARTICLE (NO_VIDEO)</span>;
+      case 'IMAGE':
+        return <span className="px-1.5 py-0.5 rounded bg-slate-800 border border-slate-700 text-slate-300 text-[10px] font-mono">IMAGE (NO_VIDEO)</span>;
+      default:
+        return <span className="px-1.5 py-0.5 rounded bg-slate-800/80 border border-slate-700/80 text-slate-400 text-[10px] font-mono">GENERAL_WEBPAGE</span>;
+    }
+  };
 
   const getStatusBadge = (cand: CandidateItem) => {
     const status = cand.pipeline_status;
     const acq = cand.acquisition_status || '';
     switch (status) {
       case 'ANALYZED':
-        if (acq === 'VERIFIED_PERCEPTUAL_MATCH' || acq === 'ACQUIRED_AND_VERIFIED') {
+        if (isConfirmedMatch(cand)) {
           return (
-            <span className="text-rose-400 font-mono text-[11px] font-semibold flex items-center gap-1">
-              <AlertTriangle className="w-3 h-3" /> CONFIRMED_MATCH
+            <span className="text-rose-400 font-mono text-[11px] font-semibold flex items-center gap-1 break-words">
+              <AlertTriangle className="w-3 h-3 shrink-0" /> <span>CONFIRMED_MATCH</span>
+            </span>
+          );
+        }
+        if (cand.overall_assessment === 'POSSIBLE_MATCH' || acq === 'ANALYZED_POSSIBLE_MATCH_UNVERIFIED_VISUAL') {
+          return (
+            <span className="text-amber-300 font-mono text-[11px] font-semibold flex items-center gap-1 break-words">
+              <AlertCircle className="w-3 h-3 shrink-0" /> <span>POSSIBLE_MATCH (REVIEW)</span>
             </span>
           );
         }
         return (
-          <span className="text-emerald-400 font-mono text-[11px] font-semibold flex items-center gap-1">
-            <CheckCircle2 className="w-3 h-3" /> ANALYZED (NO_MATCH)
+          <span className="text-emerald-400 font-mono text-[11px] font-semibold flex items-center gap-1 break-words">
+            <CheckCircle2 className="w-3 h-3 shrink-0" /> <span>ANALYZED (NO_MATCH)</span>
           </span>
         );
       case 'ACQUIRED':
-        return <span className="text-cyan-400 font-mono text-[11px]">ACQUIRED (FRAMES_EXTRACTED)</span>;
+        if (acq === 'ACQUIRED_AWAITING_AUTHORIZED_REFERENCE_MEDIA') {
+          return <span className="text-amber-300 font-mono text-[11px] break-words block">ACQUIRED (AWAITING_REFERENCE_MASTER)</span>;
+        }
+        return <span className="text-cyan-400 font-mono text-[11px] break-words block">ACQUIRED (FRAMES_EXTRACTED)</span>;
       case 'MEDIA_DETECTED':
-        return <span className="text-blue-400 font-mono text-[11px]">ACCESSIBLE (UNVERIFIED_MEDIA)</span>;
+        return <span className="text-blue-400 font-mono text-[11px] break-words block">ACCESSIBLE (UNVERIFIED_MEDIA)</span>;
       case 'REACHABLE':
-        return <span className="text-slate-300 font-mono text-[11px]">ACCESSIBLE (WEB_PAGE)</span>;
+        return <span className="text-slate-300 font-mono text-[11px] break-words block">ACCESSIBLE (WEB_PAGE)</span>;
       case 'DRM_PROTECTED':
-        return <span className="text-amber-400 font-mono text-[11px] flex items-center gap-1"><Lock className="w-3 h-3" /> INACCESSIBLE (DRM_PROTECTED)</span>;
+        return <span className="text-amber-400 font-mono text-[11px] flex items-center gap-1 break-words"><Lock className="w-3 h-3 shrink-0" /> <span>INACCESSIBLE (DRM_PROTECTED)</span></span>;
       case 'BLOCKED':
-        return <span className="text-amber-500 font-mono text-[11px]">INACCESSIBLE (BLOCKED)</span>;
+        return <span className="text-amber-500 font-mono text-[11px] break-words block">INACCESSIBLE (BLOCKED)</span>;
       case 'REQUIRES_AUTHENTICATION':
-        return <span className="text-amber-300 font-mono text-[11px]">INACCESSIBLE (AUTH_REQUIRED)</span>;
+        return <span className="text-amber-300 font-mono text-[11px] break-words block">INACCESSIBLE (AUTH_REQUIRED)</span>;
       case 'UNREACHABLE':
-        return <span className="text-rose-400 font-mono text-[11px]">INACCESSIBLE (UNREACHABLE)</span>;
+        return <span className="text-rose-400 font-mono text-[11px] break-words block">INACCESSIBLE (UNREACHABLE)</span>;
       default:
-        return <span className="text-slate-400 font-mono text-[11px]">DISCOVERED (UNVERIFIED)</span>;
+        return <span className="text-slate-400 font-mono text-[11px] break-words block">DISCOVERED (UNVERIFIED)</span>;
     }
   };
 
@@ -182,7 +306,7 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
         <div>
           <h1 className="text-xl font-bold tracking-tight text-white">Candidate Source Verification Matrix</h1>
           <p className="text-xs text-slate-400 mt-0.5">
-            Stage C: Network reachability testing, stream container inspection, DRM detection, and pipeline state transitions
+            Stage C: Target identity research, relevance ranking, network reachability, and separate forensic frame verification
           </p>
         </div>
 
@@ -247,10 +371,35 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
         </form>
       </div>
 
-      {/* Filter and Search Bar */}
+      {/* Investigator Identity & Evidence Filter Bar */}
+      <div className="flex flex-wrap items-center gap-1.5 p-2 bg-slate-900/70 border border-slate-800 rounded">
+        <span className="text-[10px] font-mono uppercase text-slate-400 px-2">Identity &amp; Research Filter:</span>
+        {[
+          { id: 'ALL', label: 'All Candidates' },
+          { id: 'STRONG_IDENTITY', label: 'Strong Identity Match' },
+          { id: 'POSSIBLE_MATCH', label: 'Possible / Series Match' },
+          { id: 'INCOMPLETE_RESEARCH', label: 'Incomplete Metadata' },
+          { id: 'CONFLICTING_EVIDENCE', label: 'Conflicting Evidence' },
+          { id: 'REJECTED_UNRELATED', label: 'Rejected / Unrelated' }
+        ].map(f => (
+          <button
+            key={f.id}
+            onClick={() => setFilterIdentity(f.id)}
+            className={`px-2.5 py-1 text-[11px] font-mono rounded transition-colors cursor-pointer ${
+              filterIdentity === f.id
+                ? 'bg-cyan-500/20 border border-cyan-500/60 text-cyan-300 font-semibold'
+                : 'bg-slate-950/60 border border-slate-800 text-slate-400 hover:text-slate-200'
+            }`}
+          >
+            {f.label}
+          </button>
+        ))}
+      </div>
+
+      {/* Pipeline Status Filter and Search Bar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
         <div className="flex items-center gap-1 p-1 bg-slate-900 border border-slate-800 rounded overflow-x-auto">
-          {['ALL', 'DISCOVERED', 'REACHABLE', 'MEDIA_DETECTED', 'ACQUIRED', 'ANALYZED', 'DRM_PROTECTED', 'BLOCKED', 'UNREACHABLE'].map(s => (
+          {['ALL', 'DISCOVERED', 'REACHABLE', 'MEDIA_DETECTED', 'ACQUIRED', 'ANALYZED', 'INACCESSIBLE', 'DUPLICATES', 'DRM_PROTECTED', 'BLOCKED', 'UNREACHABLE'].map(s => (
             <button
               key={s}
               onClick={() => setFilterStatus(s)}
@@ -281,7 +430,7 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search domain, title, or URL..."
+              placeholder="Search domain, title, identity, or URL..."
               className="w-full pl-8 pr-3 py-1.5 bg-slate-900 border border-slate-800 rounded text-xs text-white placeholder-slate-500 focus:outline-none focus:border-cyan-400"
             />
           </div>
@@ -291,7 +440,12 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
       {/* Candidate Matrix Table */}
       <div className="rounded-lg bg-slate-900/40 border border-slate-800/80 overflow-hidden">
         <div className="p-4 border-b border-slate-800/80 flex items-center justify-between">
-          <h2 className="text-sm font-semibold text-white">Surveillance Candidate Inventory</h2>
+          <div>
+            <h2 className="text-sm font-semibold text-white">Surveillance Candidate Inventory (Ranked by Target Identity Relevance)</h2>
+            <p className="text-[11px] text-slate-400">
+              Research Relevance evaluates target metadata identity; Forensic Similarity measures decoded perceptual frame sequence correlation.
+            </p>
+          </div>
           <span className="text-xs text-slate-400 font-mono">Found: {filteredCandidates.length}</span>
         </div>
 
@@ -302,114 +456,224 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs">
-              <thead className="bg-slate-950/60 text-slate-400 border-b border-slate-800 font-mono">
+            <table className="w-full lg:table-fixed min-w-[960px] lg:min-w-0 text-left text-xs border-collapse">
+              <thead className="bg-slate-950/60 text-slate-400 border-b border-slate-800 font-mono text-[11px] leading-snug">
                 <tr>
-                  <th className="py-2.5 px-4 font-medium">Candidate Source & Page</th>
-                  <th className="py-2.5 px-4 font-medium">Type / Platform</th>
-                  <th className="py-2.5 px-4 font-medium">Pipeline Status</th>
-                  <th className="py-2.5 px-4 font-medium">HTTP Code</th>
-                  <th className="py-2.5 px-4 font-medium">Latency</th>
-                  <th className="py-2.5 px-4 font-medium">Stream Resource</th>
-                  <th className="py-2.5 px-4 font-medium text-right">Actions</th>
+                  <th className="py-2.5 px-3 font-medium lg:w-[25%] align-middle">Candidate Source &amp; Detected Identity</th>
+                  <th className="py-2.5 px-3 font-medium lg:w-[25%] align-middle">Research &amp; Ranking Evidence</th>
+                  <th className="py-2.5 px-2.5 font-medium lg:w-[15%] align-middle">Discovery &amp; Classification</th>
+                  <th className="py-2.5 px-2.5 font-medium lg:w-[15%] align-middle">Forensic Match &amp; Status</th>
+                  <th className="py-2.5 px-2.5 font-medium lg:w-[9%] align-middle">Stream / HTTP</th>
+                  <th className="py-2.5 px-3 font-medium lg:w-[11%] text-right align-middle">Actions</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-800/50">
-                {filteredCandidates.map((cand) => (
-                  <tr key={cand.id} className="hover:bg-slate-800/30 transition-colors">
-                    <td className="py-3 px-4 max-w-md">
-                      <div className="flex items-center gap-2">
-                        <span className="font-semibold text-white truncate" title={cand.discovered_title || cand.domain}>
-                          {cand.discovered_title || cand.domain}
-                        </span>
-                        {cand.platform && (
-                          <span className="px-1.5 py-0.2 bg-slate-800 text-[10px] text-cyan-300 font-mono rounded">
-                            {cand.platform}
+                {filteredCandidates.map((cand, rankIdx) => {
+                  const research = cand.candidate_research;
+                  const detectedIdentity = research?.detected_identity;
+                  const researchScorePct = Math.round(getResearchScore(cand) * 100);
+                  const visualSimPct =
+                    cand.visual_similarity_score !== undefined && cand.visual_similarity_score !== null
+                      ? Math.round(cand.visual_similarity_score * 100)
+                      : null;
+
+                  return (
+                    <tr key={cand.id} className="hover:bg-slate-800/30 transition-colors align-top">
+                      <td className="py-3 px-3 min-w-0 align-top">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 font-mono text-[10px] shrink-0">
+                            #{rankIdx + 1}
                           </span>
-                        )}
-                      </div>
-                      <div className="mt-1">
-                        <CandidateSourceLink
-                          url={cand.source_url}
-                          mediaUrl={cand.media_url}
-                          canonicalUrl={cand.canonical_url}
-                          domain={cand.domain}
-                          compact={true}
-                          truncateLength={36}
-                        />
-                      </div>
-                      <div className="flex items-center gap-2 text-[10px] font-mono text-slate-500 mt-0.5">
-                        <span>ID: {cand.id}</span>
-                        {cand.reference_id && (
-                          <>
-                            <span>·</span>
-                            <span className="text-slate-400">Ref: {cand.reference_id}</span>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                    <td className="py-3 px-4 font-mono text-[11px]">
-                      <div className="text-cyan-400 font-semibold">{cand.source_category || cand.discovery_provider}</div>
-                      <div className="text-[10px] text-slate-500">{cand.asset_kind || 'DISCOVERED_PAGE'}</div>
-                    </td>
-                    <td className="py-3 px-4">
-                      {getStatusBadge(cand)}
-                      {cand.acquisition_status && cand.acquisition_status !== 'PENDING' && (
-                        <div className="text-[10px] font-mono text-slate-400 mt-0.5">
-                          {cand.acquisition_status}
+                          <span className="font-semibold text-white break-words min-w-0" title={cand.discovered_title || cand.domain}>
+                            {cand.discovered_title || cand.domain}
+                          </span>
+                          {cand.platform && (
+                            <span className="px-1.5 py-0.2 bg-slate-800 text-[10px] text-cyan-300 font-mono rounded shrink-0">
+                              {cand.platform}
+                            </span>
+                          )}
+                          {(cand.duplicate_count || 0) >= 1 && (
+                            <span className="px-1.5 py-0.2 bg-purple-950/60 border border-purple-800/50 text-[10px] text-purple-300 font-mono rounded shrink-0" title="Merged across multiple discovery routes">
+                              Merged (+{cand.duplicate_count})
+                            </span>
+                          )}
                         </div>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 font-mono tabular-nums">
-                      {cand.reachability_code > 0 ? (
-                        <span className={cand.reachability_code === 200 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
-                          {cand.reachability_code}
-                        </span>
-                      ) : (
-                        <span className="text-slate-500">—</span>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-slate-400 tabular-nums">
-                      {cand.reachability_latency_ms > 0 ? `${cand.reachability_latency_ms.toFixed(1)}ms` : '—'}
-                    </td>
-                    <td className="py-3 px-4 font-mono text-slate-300 text-[11px]">
-                      <div>{cand.media_type}</div>
-                      {cand.media_resolution && (
-                        <div className="text-[10px] text-slate-500">{cand.media_resolution}</div>
-                      )}
-                    </td>
-                    <td className="py-3 px-4 text-right space-x-1.5 whitespace-nowrap">
-                      {cand.source_url && (
-                        <a
-                          href={cand.source_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-800/40 rounded transition-colors"
-                          title="Open discovered source webpage"
-                        >
-                          <span>Open</span>
-                          <ExternalLink className="w-3 h-3" />
-                        </a>
-                      )}
 
-                      <button
-                        onClick={() => setSelectedCandidate(cand)}
-                        className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors cursor-pointer"
-                        title="View inspection diagnostics"
-                      >
-                        <Terminal className="w-3.5 h-3.5" />
-                      </button>
+                        {/* Detected Identity Details */}
+                        <div className="mt-1.5 flex items-center gap-1.5 flex-wrap">
+                          {getIdentityBadge(cand)}
+                          {detectedIdentity?.identity_summary && (
+                            <span className="text-[11px] font-mono text-slate-200 bg-slate-900/90 border border-slate-800 px-1.5 py-0.5 rounded break-words">
+                              Detected: {detectedIdentity.identity_summary}
+                            </span>
+                          )}
+                        </div>
 
-                      <button
-                        onClick={() => handleVerify(cand)}
-                        disabled={verifyingId === cand.id}
-                        className="px-2.5 py-1 text-[11px] font-medium text-slate-900 bg-cyan-400 hover:bg-cyan-300 rounded transition-colors disabled:opacity-50 cursor-pointer font-sans"
-                      >
-                        {verifyingId === cand.id ? 'Verifying...' : 'Verify'}
-                      </button>
-                    </td>
-                  </tr>
-                ))}
+                        <div className="mt-1.5 min-w-0">
+                          <CandidateSourceLink
+                            url={cand.source_url}
+                            mediaUrl={cand.media_url}
+                            canonicalUrl={cand.canonical_url}
+                            domain={cand.final_domain || cand.domain}
+                            compact={true}
+                            truncateLength={34}
+                          />
+                        </div>
+                        {cand.media_url && cand.media_url !== cand.source_url && (
+                          <div className="text-[10px] font-mono text-emerald-300/90 mt-0.5 truncate max-w-full" title={cand.media_url}>
+                            Media URL: {cand.media_url}
+                          </div>
+                        )}
+                        <div className="flex items-center gap-1.5 flex-wrap text-[10px] font-mono text-slate-500 mt-1 break-all">
+                          <span>ID: {cand.id}</span>
+                          {(cand.matched_content_id || cand.reference_id) && (
+                            <>
+                              <span>·</span>
+                              <span className="text-slate-400">Target Ref: {cand.matched_content_id || cand.reference_id}</span>
+                            </>
+                          )}
+                        </div>
+                      </td>
+
+                      {/* Research Relevance & Supporting / Contradictory / Missing Evidence */}
+                      <td className="py-3 px-3 min-w-0 align-top space-y-1.5">
+                        <div className="flex items-center justify-between gap-2">
+                          <span className="text-[10px] font-mono text-slate-400 uppercase">Research Relevance:</span>
+                          <span
+                            className={`font-mono text-xs font-bold shrink-0 ${
+                              researchScorePct >= 80
+                                ? 'text-emerald-400'
+                                : researchScorePct >= 50
+                                ? 'text-cyan-300'
+                                : researchScorePct >= 30
+                                ? 'text-amber-300'
+                                : 'text-rose-400'
+                            }`}
+                          >
+                            {researchScorePct}%
+                          </span>
+                        </div>
+
+                        {research?.ranking_explanation && (
+                          <div className="text-[11px] text-slate-300 leading-snug bg-slate-950/70 border border-slate-800/80 rounded p-1.5 break-words">
+                            {research.ranking_explanation}
+                          </div>
+                        )}
+
+                        {research?.supporting_evidence && research.supporting_evidence.length > 0 && (
+                          <div className="text-[10px] text-emerald-300/90 font-mono leading-tight break-words" title={research.supporting_evidence.join(' • ')}>
+                            + Supporting: {research.supporting_evidence[0]}
+                          </div>
+                        )}
+
+                        {research?.contradictory_evidence && research.contradictory_evidence.length > 0 && (
+                          <div className="text-[10px] text-rose-300 font-mono leading-tight break-words" title={research.contradictory_evidence.join(' • ')}>
+                            ! Conflict: {research.contradictory_evidence[0]}
+                          </div>
+                        )}
+
+                        {research?.missing_metadata && research.missing_metadata.length > 0 && (
+                          <div className="text-[10px] text-amber-300/80 font-mono leading-tight break-words" title={research.missing_metadata.join(' • ')}>
+                            ? Unknown: {research.missing_metadata[0]}
+                          </div>
+                        )}
+                      </td>
+
+                      <td className="py-3 px-2.5 min-w-0 align-top font-mono text-[11px] space-y-1">
+                        <div className="text-cyan-400 font-semibold break-words leading-snug">{cand.source_category || cand.discovery_provider}</div>
+                        {cand.source_type && (
+                          <div className="text-[10px] text-emerald-300 bg-emerald-950/40 border border-emerald-800/50 px-1.5 py-0.5 rounded inline-block max-w-full break-all">
+                            source_type: {cand.source_type}
+                          </div>
+                        )}
+                        {cand.match_method && (
+                          <div className="text-[10px] text-slate-300 break-words leading-tight" title={cand.match_method}>
+                            method: {cand.match_method}
+                          </div>
+                        )}
+                        <div className="max-w-full overflow-hidden">{getClassificationBadge(cand)}</div>
+                        <div className="text-[10px] text-slate-500 break-words">Crawl: {cand.crawl_status || 'DISCOVERED'}</div>
+                      </td>
+
+                      {/* Separate Forensic Confidence & Verification Status */}
+                      <td className="py-3 px-2.5 min-w-0 align-top space-y-1">
+                        {getStatusBadge(cand)}
+                        <div className="flex items-center justify-between gap-1.5 flex-wrap pt-1 border-t border-slate-800/60 font-mono text-[11px]">
+                          <span className="text-slate-400 text-[10px]">Forensic Visual Sim:</span>
+                          {visualSimPct !== null ? (
+                            <span
+                              className={`font-bold ${
+                                isConfirmedMatch(cand)
+                                  ? 'text-rose-400'
+                                  : visualSimPct >= 70
+                                  ? 'text-amber-300'
+                                  : 'text-slate-300'
+                              }`}
+                            >
+                              {visualSimPct}%
+                            </span>
+                          ) : (
+                            <span className="text-slate-500 text-[10px]">Unverified</span>
+                          )}
+                        </div>
+                        <div className="text-[10px] font-mono text-slate-400 break-words leading-tight">
+                          Acq: <span className="text-slate-300">{cand.acquisition_status || 'PENDING'}</span>
+                        </div>
+                      </td>
+
+                      <td className="py-3 px-2.5 min-w-0 align-top font-mono text-slate-300 text-[11px] space-y-0.5">
+                        <div className="break-words">{cand.media_type}</div>
+                        {cand.media_resolution && (
+                          <div className="text-[10px] text-slate-500 break-words">{cand.media_resolution}</div>
+                        )}
+                        <div className="text-[10px] tabular-nums break-words">
+                          HTTP:{' '}
+                          {cand.reachability_code > 0 ? (
+                            <span className={cand.reachability_code === 200 ? 'text-emerald-400 font-bold' : 'text-rose-400 font-bold'}>
+                              {cand.reachability_code}
+                            </span>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                          {cand.reachability_latency_ms > 0 ? ` (${cand.reachability_latency_ms.toFixed(0)}ms)` : ''}
+                        </div>
+                      </td>
+
+                      <td className="py-3 px-3 min-w-0 align-top text-right">
+                        <div className="inline-flex items-center justify-end gap-1 flex-wrap">
+                          {cand.source_url && (
+                            <a
+                              href={cand.source_url}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 px-2 py-1 text-[11px] font-medium text-cyan-400 hover:text-cyan-300 bg-cyan-950/40 hover:bg-cyan-900/50 border border-cyan-800/40 rounded transition-colors shrink-0"
+                              title="Open discovered source webpage"
+                            >
+                              <span>Open</span>
+                              <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+
+                          <button
+                            onClick={() => setSelectedCandidate(cand)}
+                            className="p-1 text-slate-400 hover:text-white rounded hover:bg-slate-800 transition-colors cursor-pointer shrink-0"
+                            title="View inspection diagnostics & research evidence"
+                          >
+                            <Terminal className="w-3.5 h-3.5" />
+                          </button>
+
+                          <button
+                            onClick={() => handleVerify(cand)}
+                            disabled={verifyingId === cand.id}
+                            className="px-2 py-1 text-[11px] font-medium text-slate-900 bg-cyan-400 hover:bg-cyan-300 rounded transition-colors disabled:opacity-50 cursor-pointer font-sans shrink-0"
+                          >
+                            {verifyingId === cand.id ? 'Verifying...' : 'Verify'}
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -456,6 +720,74 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
                 />
               </div>
 
+              {/* Candidate Research & Identity Verification Breakdown */}
+              {selectedCandidate.candidate_research && (
+                <div className="p-3.5 bg-slate-950 rounded border border-slate-800 space-y-2.5 text-[11px]">
+                  <div className="flex items-center justify-between border-b border-slate-800 pb-2 flex-wrap gap-2">
+                    <span className="text-cyan-400 font-semibold uppercase">
+                      Target Identity Research &amp; Ranking Breakdown
+                    </span>
+                    <div className="flex items-center gap-2">
+                      {getIdentityBadge(selectedCandidate)}
+                      <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-200">
+                        Research Relevance: {Math.round(getResearchScore(selectedCandidate) * 100)}%
+                      </span>
+                      <span className="px-2 py-0.5 rounded bg-slate-900 border border-slate-700 text-slate-200">
+                        Forensic Visual Sim:{' '}
+                        {selectedCandidate.visual_similarity_score !== undefined && selectedCandidate.visual_similarity_score !== null
+                          ? `${Math.round(selectedCandidate.visual_similarity_score * 100)}%`
+                          : 'Unverified'}
+                      </span>
+                    </div>
+                  </div>
+
+                  <div className="text-slate-200">
+                    <span className="text-slate-400">Detected Identity: </span>
+                    <span className="font-semibold text-white">
+                      {selectedCandidate.candidate_research.detected_identity.identity_summary}
+                    </span>
+                  </div>
+
+                  <div className="p-2 rounded bg-slate-900/80 border border-slate-800 text-slate-300">
+                    <span className="text-slate-400 font-semibold">Ranking Explanation: </span>
+                    {selectedCandidate.candidate_research.ranking_explanation}
+                  </div>
+
+                  {selectedCandidate.candidate_research.supporting_evidence.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-emerald-400 uppercase font-semibold">Supporting Identity Evidence</div>
+                      <ul className="list-disc list-inside text-emerald-300/90 space-y-0.5 text-[10px]">
+                        {selectedCandidate.candidate_research.supporting_evidence.map((ev, i) => (
+                          <li key={i}>{ev}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {selectedCandidate.candidate_research.contradictory_evidence.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-rose-400 uppercase font-semibold">Contradictory Evidence (Penalized)</div>
+                      <ul className="list-disc list-inside text-rose-300 space-y-0.5 text-[10px]">
+                        {selectedCandidate.candidate_research.contradictory_evidence.map((ev, i) => (
+                          <li key={i}>{ev}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {selectedCandidate.candidate_research.missing_metadata.length > 0 && (
+                    <div className="space-y-1">
+                      <div className="text-[10px] text-amber-400 uppercase font-semibold">Missing Metadata &amp; Uncertainty (Treated as Unknown)</div>
+                      <ul className="list-disc list-inside text-amber-300/90 space-y-0.5 text-[10px]">
+                        {selectedCandidate.candidate_research.missing_metadata.map((ev, i) => (
+                          <li key={i}>{ev}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                 <div className="p-2.5 bg-slate-950 rounded border border-slate-800">
                   <div className="text-[10px] text-slate-400">PIPELINE STATUS</div>
@@ -487,6 +819,70 @@ export const CandidateMatrixView: React.FC<CandidateMatrixViewProps> = ({
                 <div className="p-2 bg-slate-950 rounded border border-slate-800">
                   <div className="text-[10px] text-slate-500">DISCOVERED TIMESTAMP</div>
                   <div className="text-slate-300 mt-0.5">{new Date(selectedCandidate.discovered_at).toLocaleString()}</div>
+                </div>
+              </div>
+
+              {/* Discovery Provenance & Asset Classification */}
+              <div className="p-3 bg-slate-950 rounded border border-slate-800 space-y-2 text-[11px]">
+                <div className="flex items-center justify-between border-b border-slate-800/80 pb-1.5">
+                  <span className="text-slate-400 font-semibold uppercase">Discovery Provenance &amp; Asset Classification</span>
+                  <div className="flex items-center gap-2">
+                    {getClassificationBadge(selectedCandidate)}
+                    <span className="px-1.5 py-0.5 rounded bg-slate-900 border border-slate-800 text-slate-300 text-[10px]">
+                      Crawl: {selectedCandidate.crawl_status || 'DISCOVERED'}
+                    </span>
+                    {(selectedCandidate.duplicate_count || 1) > 1 && (
+                      <span className="px-1.5 py-0.5 rounded bg-purple-950/60 border border-purple-800/60 text-purple-300 text-[10px]">
+                        Deduplicated ({selectedCandidate.duplicate_count}x)
+                      </span>
+                    )}
+                  </div>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-2 text-[10px]">
+                  <div>
+                    <span className="text-slate-500">Original URL: </span>
+                    <span className="text-slate-300 break-all">{selectedCandidate.original_url || selectedCandidate.source_url}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Final Resolved URL / Domain: </span>
+                    <span className="text-slate-300 break-all">
+                      {selectedCandidate.final_url || selectedCandidate.source_url} ({selectedCandidate.final_domain || selectedCandidate.domain})
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Referring Page / Seed: </span>
+                    <span className="text-slate-300 break-all">{selectedCandidate.referring_page || 'Direct / Search Provider'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Matched Keywords: </span>
+                    <span className="text-cyan-300 break-all">{selectedCandidate.matched_keywords || 'N/A'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Discovery Source Type: </span>
+                    <span className="text-emerald-300 font-mono">{selectedCandidate.source_type || 'title_search'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-500">Match Method: </span>
+                    <span className="text-slate-200 font-mono">{selectedCandidate.match_method || 'title_match'}</span>
+                  </div>
+                  {selectedCandidate.media_url && (
+                    <div>
+                      <span className="text-slate-500">Direct Media URL: </span>
+                      <span className="text-emerald-300 font-mono break-all">{selectedCandidate.media_url}</span>
+                    </div>
+                  )}
+                  {(selectedCandidate.matched_content_id || selectedCandidate.reference_id) && (
+                    <div>
+                      <span className="text-slate-500">Matched Reference Content ID: </span>
+                      <span className="text-cyan-300 font-mono">{selectedCandidate.matched_content_id || selectedCandidate.reference_id}</span>
+                    </div>
+                  )}
+                  {selectedCandidate.discovery_provenance && selectedCandidate.discovery_provenance.source_urls.length > 1 && (
+                    <div>
+                      <span className="text-slate-500">Merged Source URLs: </span>
+                      <span className="text-purple-300 font-mono break-all">{selectedCandidate.discovery_provenance.source_urls.join(' • ')}</span>
+                    </div>
+                  )}
                 </div>
               </div>
 

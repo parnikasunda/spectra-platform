@@ -1,5 +1,5 @@
 /**
- * Argus Anti-Piracy Intelligence & Evidence Platform
+ * SPECTRA Anti-Piracy Intelligence & Evidence Platform
  * Root Application Component
  */
 
@@ -60,21 +60,31 @@ export default function App() {
     try {
       const [s, r, j, c, e] = await Promise.all([
         fetchStats().catch(() => null),
-        fetchReferences().catch(() => []),
-        fetchDiscoveryJobs().catch(() => []),
-        fetchCandidates().catch(() => []),
-        fetchEvidenceRecords().catch(() => [])
+        fetchReferences().catch(() => null),
+        fetchDiscoveryJobs().catch(() => null),
+        fetchCandidates().catch(() => null),
+        fetchEvidenceRecords().catch(() => null)
       ]);
       if (s) setStats(s);
-      setReferences(r);
-      setJobs(j);
-      setCandidates(c);
-      setEvidenceRecords(e);
-      if (e.length > 0 && !selectedEvidence) {
-        const preferred = e.find(item => item.id === 'ev_ts_youtube_fullcopy') || 
-                          e.find(item => item.sample_pairs && item.sample_pairs.length > 0) || 
-                          e[0];
-        setSelectedEvidence(preferred);
+      if (Array.isArray(r)) setReferences(r);
+      if (Array.isArray(j)) setJobs(j);
+      if (Array.isArray(c)) setCandidates(c);
+      if (Array.isArray(e)) {
+        setEvidenceRecords(e);
+        if (e.length > 0 && !selectedEvidence) {
+          const preferred = e.find(item => item.id === 'ev_ts_youtube_fullcopy') || 
+                            e.find(item => item.sample_pairs && item.sample_pairs.length > 0) || 
+                            e[0];
+          setSelectedEvidence(preferred);
+        }
+      }
+      // If backend was still restarting when page loaded, schedule a single automatic retry
+      if (r === null) {
+        setTimeout(() => {
+          fetchReferences().then(freshRefs => {
+            if (Array.isArray(freshRefs)) setReferences(freshRefs);
+          }).catch(() => {});
+        }, 1500);
       }
     } catch (err) {
       console.error('Failed to load system state:', err);
@@ -86,6 +96,14 @@ export default function App() {
   useEffect(() => {
     loadAllData();
   }, [loadAllData]);
+
+  useEffect(() => {
+    if (currentTab === 'references') {
+      fetchReferences().then(freshRefs => {
+        if (Array.isArray(freshRefs)) setReferences(freshRefs);
+      }).catch(() => {});
+    }
+  }, [currentTab]);
 
   const handleLoadSampleSuite = async () => {
     setIsLoadingSample(true);
@@ -130,7 +148,21 @@ export default function App() {
 
   const handleRegisterUrl = async (payload: any) => {
     const item = await registerReferenceUrl(payload);
-    showNotification('Reference stream registered and frame fingerprints computed.', 'success');
+    if (item?.status === 'METADATA_REGISTERED' || item?.status === 'AWAITING_AUTHORIZED_MEDIA') {
+      showNotification(
+        `Reference metadata registered (${item.status}) — direct video stream was not acquired. Attach an authorized master video file to compute frame fingerprints.`,
+        'info'
+      );
+    } else if (item?.status === 'INVALID') {
+      showNotification('Source rejected as INVALID (test pattern). Upload an authentic video master.', 'error');
+    } else if (item?.status === 'PROCESSING' || item?.extraction_status === 'PARTIAL') {
+      showNotification(
+        `Reference registered with partial frame extraction (${item.retrievable_frame_image_count ?? item.fingerprint_count ?? 0}/${item.expected_frame_count ?? 0} frames).`,
+        'info'
+      );
+    } else {
+      showNotification('Reference stream registered and frame fingerprints computed.', 'success');
+    }
     await loadAllData();
     return item;
   };
@@ -156,7 +188,10 @@ export default function App() {
   };
 
   const handleLiveSportsSweep = async () => {
-    const sportsRef = references.find(r => r.asset_type === 'LIVE_SPORTS' && r.status === 'REGISTERED') || references.find(r => r.status === 'REGISTERED') || references[0];
+    const sportsRef =
+      references.find(r => r.asset_type === 'LIVE_SPORTS' && (r.status === 'FINGERPRINTED' || r.status === 'REGISTERED' || r.status === 'AWAITING_AUTHORIZED_MEDIA' || r.status === 'METADATA_REGISTERED')) ||
+      references.find(r => r.status === 'FINGERPRINTED' || r.status === 'REGISTERED') ||
+      references[0];
     const keywords = sportsRef ? sportsRef.title : 'Live Sports Champions League Final';
     showNotification(`Executing automated live sports surveillance sweep for "${keywords}"...`, 'info');
     try {
@@ -200,10 +235,10 @@ export default function App() {
       )}
 
       {/* Main Viewport Container */}
-      <main className="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8">
+      <main className="flex-1 max-w-[1440px] w-full mx-auto p-4 sm:p-6 lg:p-8">
         {isLoading ? (
           <div className="py-24 text-center text-slate-500 text-xs font-mono">
-            Loading Argus intelligence state from database...
+            Loading SPECTRA intelligence state from database...
           </div>
         ) : (
           <>
@@ -236,6 +271,7 @@ export default function App() {
               <DiscoverySweepsView
                 jobs={jobs}
                 references={references}
+                candidates={candidates}
                 onRefresh={loadAllData}
                 onLaunchSweep={handleLaunchSweep}
                 onNavigateToCandidates={(refId) => {
@@ -291,9 +327,9 @@ export default function App() {
 
       {/* Quiet, Compliant Footer (no bottom telemetry tickers) */}
       <footer className="border-t border-slate-900 bg-slate-950 py-4 px-6 text-xs text-slate-400">
-        <div className="max-w-7xl mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
+        <div className="max-w-[1440px] mx-auto flex flex-col sm:flex-row items-center justify-between gap-3">
           <div className="flex items-center gap-2">
-            <span className="font-semibold text-slate-300">Argus Platform</span>
+            <span className="font-semibold text-slate-300">SPECTRA</span>
             <span>·</span>
             <span>Anti-Piracy Intelligence & Digital Evidence Architecture</span>
           </div>

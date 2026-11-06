@@ -13,6 +13,7 @@
 import fs from 'node:fs';
 import { db } from '../db/database.js';
 import { FingerprintEngine } from './fingerprint.js';
+import { CandidateResearchEngine } from './candidateResearch.js';
 import { AdapterRegistry, YouTubeAdapter } from './adapters/index.js';
 import {
   CandidateItem,
@@ -55,10 +56,15 @@ export class VerifierEngine {
     // -------------------------------------------------------------
     // Step 1: Route to Specialized Source Adapter & Inspect Access
     // -------------------------------------------------------------
-    const adapter = AdapterRegistry.getAdapterForUrl(candidate.source_url);
-    log(`Dispatched to modular adapter: "${adapter.name}" (Category: ${adapter.sourceCategory})`);
+    const probeTargetUrl = candidate.media_url || candidate.source_url;
+    const o2Adapter = AdapterRegistry.getO2TvSeriesAdapter();
+    const adapter =
+      o2Adapter.canHandle(candidate.source_url) || o2Adapter.canHandle(probeTargetUrl)
+        ? o2Adapter
+        : AdapterRegistry.getAdapterForUrl(probeTargetUrl);
+    log(`Dispatched to modular adapter: "${adapter.name}" (Category: ${adapter.sourceCategory}, Target: ${probeTargetUrl})`);
 
-    const probeResult = await adapter.acquireAndProbe(candidate.source_url, { timeoutMs: 5000 });
+    const probeResult = await adapter.acquireAndProbe(probeTargetUrl, { timeoutMs: 5000 });
 
     for (const l of probeResult.technicalLogs) {
       logs.push(l);
@@ -74,6 +80,21 @@ export class VerifierEngine {
     const rawHeaders: Record<string, string> = probeResult.headers || {};
     const drmScheme: string | undefined = probeResult.drmScheme;
     const platformName = probeResult.platform || candidate.platform || candidate.domain;
+    const finalUrl = probeResult.finalUrl || candidate.final_url || candidate.source_url;
+    const finalDomain = probeResult.finalDomain || candidate.final_domain || candidate.domain;
+    const crawlStatus =
+      probeResult.crawlStatus ||
+      (pipelineStatus === 'UNREACHABLE'
+        ? 'UNREACHABLE'
+        : pipelineStatus === 'BLOCKED'
+        ? 'BLOCKED'
+        : pipelineStatus === 'DRM_PROTECTED' || pipelineStatus === 'REQUIRES_AUTHENTICATION'
+        ? 'ACCESS_RESTRICTED'
+        : probeResult.redirected
+        ? 'REDIRECTED_ACCESSIBLE'
+        : reachabilityCode === 200
+        ? 'CRAWLED_OK'
+        : 'DISCOVERED');
 
     // Handle non-accessible states: DRM_PROTECTED, BLOCKED, REQUIRES_AUTHENTICATION, UNREACHABLE, UNSUPPORTED
     const isNonAcquirable = (
@@ -85,7 +106,7 @@ export class VerifierEngine {
     );
 
     if (isNonAcquirable) {
-      log(`Verification result: Pipeline status "${pipelineStatus}" (HTTP ${reachabilityCode || 'ERR'}). Media stream not acquirable.`);
+      log(`Verification result: Pipeline status "${pipelineStatus}" (HTTP ${reachabilityCode || 'ERR'}, Crawl: ${crawlStatus}). Media stream not acquirable.`);
       if (pipelineStatus === 'DRM_PROTECTED') {
         log(`[Compliance Guarantee] DRM protection verified (${drmScheme || 'Widevine'}). Technical decryption without authorization is prohibited.`);
       }
@@ -97,11 +118,32 @@ export class VerifierEngine {
           ? 'INACCESSIBLE_ANTI_BOT_BLOCKED'
           : pipelineStatus === 'REQUIRES_AUTHENTICATION'
           ? 'INACCESSIBLE_AUTH_REQUIRED'
+          : pipelineStatus === 'UNSUPPORTED'
+          ? 'UNSUPPORTED_OR_TORRENT_SKIPPED'
           : 'INACCESSIBLE_UNREACHABLE';
+
+      const nonAcqClassification =
+        probeResult.candidateClassification ||
+        (pipelineStatus === 'DRM_PROTECTED' ? 'VIDEO_ASSET' : 'GENERAL_WEBPAGE');
+
+      const nonAcqResearch = CandidateResearchEngine.evaluateCandidateAgainstTarget({
+        candidate: {
+          ...candidate,
+          final_url: finalUrl,
+          final_domain: finalDomain,
+          platform: platformName
+        },
+        reference,
+        verifiedPageTitle: probeResult.pageTitle
+      });
 
       db.updateCandidateVerification(candidate.id, {
         pipeline_status: pipelineStatus,
         acquisition_status: acqStatus,
+        final_url: finalUrl,
+        final_domain: finalDomain,
+        crawl_status: crawlStatus,
+        candidate_classification: nonAcqClassification,
         platform: platformName,
         reachability_code: reachabilityCode,
         reachability_latency_ms: latencyMs,
@@ -109,6 +151,9 @@ export class VerifierEngine {
         source_category: adapter.sourceCategory,
         drm_scheme: drmScheme,
         raw_headers_json: JSON.stringify(rawHeaders),
+        research_relevance_score: nonAcqResearch.research_relevance_score,
+        identity_relationship: nonAcqResearch.identity_relationship,
+        detected_identity_json: JSON.stringify(nonAcqResearch),
         verification_logs: logs.join('\n'),
         last_inspected_at: new Date().toISOString()
       });
@@ -121,32 +166,74 @@ export class VerifierEngine {
     }
 
     // -------------------------------------------------------------
-    // Step 2: Verify Page Content Plausible Relation to Target Reference
+    // Step 2: Verify Page Content Plausible Relation & Research Metadata
     // -------------------------------------------------------------
-    const verifiedTitle = probeResult.pageTitle || candidate.discovered_title;
-    if (reference) {
-      const relevance = YouTubeAdapter.computeRelevanceScore(
-        `${verifiedTitle} ${candidate.discovered_title}`,
-        reference.title,
-        reference.title
-      );
-      log(`Verified page title: "${verifiedTitle}" — Content relevance to reference "${reference.title}": ${(relevance * 100).toFixed(0)}%`);
-      log(`[Verification Policy] Title/snippet overlap alone is NOT proof of infringement. Perceptual frame comparison is required.`);
+    let webResearchSignals: Awaited<ReturnType<typeof CandidateResearchEngine.fetchWebpageResearchMetadata>> = null;
+    if (
+      /^https?:\/\//i.test(candidate.source_url) &&
+      !/\.(mp4|m3u8|webm|mkv|mov|ts)(\?|$)/i.test(candidate.source_url)
+    ) {
+      webResearchSignals = await CandidateResearchEngine.fetchWebpageResearchMetadata(candidate.source_url, 3200);
     }
 
-    // If the candidate URL is merely a reachable HTML webpage or embedded player page
-    // without a decodable video stream, keep it as REACHABLE or MEDIA_DETECTED (unverified media).
+    const verifiedTitle = probeResult.pageTitle || webResearchSignals?.pageTitle || candidate.discovered_title;
+    const candidateResearchEval = CandidateResearchEngine.evaluateCandidateAgainstTarget({
+      candidate: {
+        ...candidate,
+        final_url: finalUrl,
+        final_domain: finalDomain,
+        platform: platformName,
+        media_url: probeResult.resolvedMediaUrl || candidate.media_url
+      },
+      reference,
+      verifiedPageTitle: verifiedTitle,
+      pageDescription: webResearchSignals?.description,
+      structuredMetadata: webResearchSignals?.structuredMetadata
+    });
+
+    if (reference) {
+      log(
+        `Verified page title: "${verifiedTitle}" — Identity relationship: ${candidateResearchEval.identity_relationship} | Research relevance to "${reference.title}": ${(candidateResearchEval.research_relevance_score * 100).toFixed(0)}% (${candidateResearchEval.detected_identity.identity_summary})`
+      );
+      if (candidateResearchEval.contradictory_evidence.length > 0) {
+        log(`[Identity Warning] Contradictory evidence detected: ${candidateResearchEval.contradictory_evidence.join(' | ')}`);
+      }
+      log(`[Verification Policy] Title/metadata research is strictly separated from forensic frame confidence. Perceptual frame sequence comparison is required.`);
+    }
+
+    // If the candidate URL is merely a reachable HTML webpage, article, image, or embedded player page
+    // without a decodable video stream, keep it as REACHABLE or MEDIA_DETECTED (never VERIFIED_VIDEO_ASSET).
     if (pipelineStatus === 'REACHABLE' || (pipelineStatus === 'MEDIA_DETECTED' && !probeResult.resolvedMediaUrl && !candidate.file_path)) {
+      const pageClassification =
+        probeResult.candidateClassification ||
+        (pipelineStatus === 'MEDIA_DETECTED' ? 'VIDEO_ASSET' : 'GENERAL_WEBPAGE');
+
       const acqStatus =
-        pipelineStatus === 'MEDIA_DETECTED'
+        pageClassification === 'IMAGE'
+          ? 'ACCESSIBLE_STATIC_IMAGE_NO_VIDEO'
+          : pageClassification === 'ARTICLE'
+          ? 'ACCESSIBLE_ARTICLE_NO_STREAM'
+          : pipelineStatus === 'MEDIA_DETECTED'
           ? 'ACCESSIBLE_UNVERIFIED_EMBED'
           : 'ACCESSIBLE_WEB_PAGE_NO_STREAM';
 
-      log(`Candidate URL is accessible (HTTP ${reachabilityCode}), but no raw decodable video stream could be extracted. Status remains ${pipelineStatus} (${acqStatus}).`);
+      const mappedAssetKind =
+        pageClassification === 'ARTICLE'
+          ? 'ARTICLE'
+          : pageClassification === 'IMAGE'
+          ? 'IMAGE'
+          : 'DISCOVERED_PAGE';
+
+      log(`Candidate URL is accessible (HTTP ${reachabilityCode}), classified as ${pageClassification}. A webpage or article mentioning a video is not a verified video asset. Status remains ${pipelineStatus} (${acqStatus}).`);
 
       db.updateCandidateVerification(candidate.id, {
         pipeline_status: pipelineStatus,
         acquisition_status: acqStatus,
+        final_url: finalUrl,
+        final_domain: finalDomain,
+        crawl_status: crawlStatus,
+        candidate_classification: pageClassification,
+        asset_kind: mappedAssetKind,
         platform: platformName,
         reachability_code: reachabilityCode,
         reachability_latency_ms: latencyMs,
@@ -156,6 +243,9 @@ export class VerifierEngine {
         is_live_stream: isLive,
         source_category: adapter.sourceCategory,
         raw_headers_json: JSON.stringify(rawHeaders),
+        research_relevance_score: candidateResearchEval.research_relevance_score,
+        identity_relationship: candidateResearchEval.identity_relationship,
+        detected_identity_json: JSON.stringify(candidateResearchEval),
         verification_logs: logs.join('\n'),
         last_inspected_at: new Date().toISOString()
       });
@@ -168,47 +258,61 @@ export class VerifierEngine {
     }
 
     // -------------------------------------------------------------
-    // Step 3: Genuine Media Keyframe Extraction via FFmpeg
+    // Step 3: Evidence Collection — Genuine Media Keyframe Extraction via FFmpeg
     // -------------------------------------------------------------
     let candidateFingerprints = db.getCandidateFingerprints(candidate.id);
+    const hasPersistedThumbnails = candidateFingerprints.some(
+      fp => Boolean(fp.thumbnail_url || fp.thumbnail_path || fp.thumbnail_data)
+    );
 
-    if (candidateFingerprints.length === 0) {
-      let mediaSourceToExtract = probeResult.resolvedMediaUrl || candidate.source_url;
+    if (candidateFingerprints.length === 0 || !hasPersistedThumbnails) {
+      let mediaSourceToExtract = probeResult.resolvedMediaUrl || candidate.media_url || candidate.source_url;
       if (candidate.file_path && fs.existsSync(candidate.file_path)) {
         mediaSourceToExtract = candidate.file_path;
       }
 
       log(`Attempting FFmpeg keyframe extraction from resolved source: ${mediaSourceToExtract}`);
 
+      const candidateInterval = reference?.sample_interval_sec && reference.sample_interval_sec > 0
+        ? reference.sample_interval_sec
+        : 2;
       const extracted = await FingerprintEngine.extractVideoFingerprints(mediaSourceToExtract, {
-        intervalSec: 2,
-        maxFrames: 8,
+        intervalSec: candidateInterval,
+        durationSec: mediaDuration || candidate.media_duration_sec,
         generateThumbnails: true,
         title: verifiedTitle,
         isCandidate: true
       });
 
       if (extracted.length > 0) {
+        db.clearCandidateFingerprints(candidate.id);
         candidateFingerprints = extracted.map(f => ({
-          id: `cfp_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+          id: `cfp_${candidate.id}_${f.frame_index}`,
           candidate_id: candidate.id,
           timestamp_sec: f.timestamp_sec,
           frame_index: f.frame_index,
           phash_hex: f.phash_hex,
+          vhash_hex: f.vhash_hex,
+          crop_phash_hex: f.crop_phash_hex,
           avg_luminance: f.avg_luminance,
           thumbnail_data: f.thumbnail_data,
           thumbnail_url: f.thumbnail_url || (f.thumbnail_data?.startsWith('/thumbnails/') ? f.thumbnail_data : undefined),
-          thumbnail_path: f.thumbnail_path,
+          thumbnail_path: f.thumbnail_path || f.thumbnail_url,
           created_at: new Date().toISOString()
         }));
 
         db.insertCandidateFingerprints(candidateFingerprints);
-        log(`Decoded ${candidateFingerprints.length} genuine keyframes with 64-bit dHash perceptual fingerprints.`);
-      } else {
+        log(`Decoded ${candidateFingerprints.length} genuine keyframes across entire candidate video with 64-bit multi-feature perceptual hashes and persisted frame thumbnails.`);
+      } else if (candidateFingerprints.length === 0) {
         log(`No decodable video keyframes could be extracted from "${mediaSourceToExtract}". Candidate remains unverified (MEDIA_DETECTED).`);
         db.updateCandidateVerification(candidate.id, {
           pipeline_status: 'MEDIA_DETECTED',
           acquisition_status: 'ACCESSIBLE_UNVERIFIED_MEDIA',
+          final_url: finalUrl,
+          final_domain: finalDomain,
+          crawl_status: crawlStatus,
+          candidate_classification: 'VIDEO_ASSET',
+          asset_kind: 'DISCOVERED_PAGE',
           platform: platformName,
           media_url: probeResult.resolvedMediaUrl,
           reachability_code: reachabilityCode,
@@ -219,6 +323,9 @@ export class VerifierEngine {
           is_live_stream: isLive,
           source_category: adapter.sourceCategory,
           raw_headers_json: JSON.stringify(rawHeaders),
+          research_relevance_score: candidateResearchEval.research_relevance_score,
+          identity_relationship: candidateResearchEval.identity_relationship,
+          detected_identity_json: JSON.stringify(candidateResearchEval),
           verification_logs: logs.join('\n'),
           last_inspected_at: new Date().toISOString()
         });
@@ -230,20 +337,52 @@ export class VerifierEngine {
         };
       }
     } else {
-      log(`Loaded ${candidateFingerprints.length} existing candidate keyframe fingerprints.`);
+      log(`Loaded ${candidateFingerprints.length} existing candidate keyframe fingerprints with persisted thumbnails.`);
     }
 
     pipelineStatus = 'ACQUIRED';
 
     // -------------------------------------------------------------
-    // Step 4: Perceptual Frame Comparison Against Registered Reference
+    // Step 4: Separate Visual Frame Comparison & Metadata/Context Assessment
     // -------------------------------------------------------------
     let evidence: EvidenceRecord | null = null;
     let acqStatus = 'ACQUIRED_FRAMES_EXTRACTED';
 
-    if (reference && reference.status === 'REGISTERED' && referenceFingerprints.length > 0) {
+    const hasValidReferenceFingerprints = Boolean(
+      reference &&
+      (reference.status === 'REGISTERED' || reference.status === 'FINGERPRINTED') &&
+      referenceFingerprints.length > 0
+    );
+
+    const candidateWithPlatform: CandidateItem = {
+      ...candidate,
+      platform: platformName,
+      is_live_stream: isLive,
+      media_type: mediaType,
+      reachability_code: reachabilityCode
+    };
+
+    const capturedFrames = FingerprintEngine.buildCapturedCandidateFrames(
+      candidateWithPlatform,
+      candidateFingerprints,
+      hasValidReferenceFingerprints ? referenceFingerprints : []
+    );
+
+    const firstCapturedThumb =
+      capturedFrames.find(cf => cf.thumbnail_url)?.thumbnail_url ||
+      candidate.thumbnail_url ||
+      undefined;
+
+    let visualSimScore: number | undefined;
+    let metaRelScore: number | undefined;
+    let overallAssessmentState: EvidenceRecord['overall_assessment'] = 'INSUFFICIENT_EVIDENCE';
+
+    if (hasValidReferenceFingerprints && reference) {
       pipelineStatus = 'ANALYZED';
-      log(`Running perceptual 64-bit dHash sequence comparison against registered reference "${reference.title}" (${referenceFingerprints.length} reference frames)...`);
+      const isLiveSportsContext = reference.asset_type === 'LIVE_SPORTS' || isLive;
+      log(
+        `Running all-to-all (R×C) perceptual 64-bit dHash sequence comparison against fingerprinted reference "${reference.title}" (${referenceFingerprints.length} reference frames × ${candidateFingerprints.length} candidate frames, mode=${isLiveSportsContext ? 'LIVE_SPORTS_MULTI_OFFSET' : 'STANDARD'})...`
+      );
 
       let candidateAudioFps: AudioFingerprint[] = [];
       let referenceAudioFps: AudioFingerprint[] = [];
@@ -266,18 +405,44 @@ export class VerifierEngine {
         candidateFingerprints,
         referenceFingerprints,
         {
-          hammingThreshold: 12,
+          hammingThreshold: isLiveSportsContext ? 16 : 13,
           minMatchedFrames: 2,
+          isLiveSports: isLiveSportsContext,
+          referenceDurationSec: reference.duration_sec,
+          candidateDurationSec: mediaDuration || candidate.media_duration_sec,
           candidateAudioFps: candidateAudioFps.length > 0 ? candidateAudioFps : undefined,
           referenceAudioFps: referenceAudioFps.length > 0 ? referenceAudioFps : undefined
         }
       );
 
-      const isMatch = comparison.matchStatus === 'POTENTIAL_MATCH';
-      acqStatus = isMatch ? 'VERIFIED_PERCEPTUAL_MATCH' : 'ANALYZED_NO_PERCEPTUAL_MATCH';
+      const metaAssessment = FingerprintEngine.assessMetadataAndContext({
+        candidate: candidateWithPlatform,
+        reference,
+        verifiedPageTitle: verifiedTitle,
+        candidateFps: candidateFingerprints,
+        referenceFps: referenceFingerprints,
+        visualSimilarityScore: comparison.visualSimilarityScore,
+        matchedFramesCount: comparison.matchedFramesCount,
+        minHammingDist: comparison.minHammingDist,
+        confidenceScore: comparison.confidenceScore
+      });
+
+      visualSimScore = comparison.visualSimilarityScore;
+      metaRelScore = metaAssessment.metadataRelevanceScore;
+      overallAssessmentState = metaAssessment.overallAssessment;
+
+      const isConfirmedMatch =
+        comparison.matchStatus === 'POTENTIAL_MATCH' &&
+        overallAssessmentState === 'MATCH_FOUND';
+
+      acqStatus = isConfirmedMatch
+        ? 'VERIFIED_PERCEPTUAL_MATCH'
+        : overallAssessmentState === 'POSSIBLE_MATCH'
+        ? 'ANALYZED_POSSIBLE_MATCH_UNVERIFIED_VISUAL'
+        : 'ANALYZED_NO_PERCEPTUAL_MATCH';
 
       log(
-        `Perceptual comparison complete: Status=${comparison.matchStatus}, Classification=${comparison.matchClassification}, Confidence=${(comparison.confidenceScore * 100).toFixed(1)}%, MinHammingDist=${comparison.minHammingDist} bits (${comparison.matchedFramesCount}/${comparison.totalComparedFrames} frames aligned)`
+        `Perceptual & Context Analysis complete: Overall=${overallAssessmentState}, Identity=${candidateResearchEval.identity_relationship}, ResearchRel=${(candidateResearchEval.research_relevance_score * 100).toFixed(0)}%, VisualSim=${((visualSimScore ?? 0) * 100).toFixed(1)}%, MinHammingDist=${comparison.minHammingDist} bits (${comparison.matchedFramesCount}/${comparison.totalComparedFrames} frames within threshold, RefCoverage=${comparison.coverageMetrics.reference_coverage_pct}%, CandCoverage=${comparison.coverageMetrics.candidate_coverage_pct}%)`
       );
 
       const custodySeal = FingerprintEngine.generateCustodySeal({
@@ -291,20 +456,43 @@ export class VerifierEngine {
       });
 
       evidence = {
-        id: `ev_${Date.now()}_${Math.random().toString(36).substring(7)}`,
+        id: `ev_${candidate.id}`,
         candidate_id: candidate.id,
         reference_id: reference.id,
         candidate_url: candidate.source_url,
         candidate_domain: candidate.domain,
+        candidate_platform: platformName,
+        candidate_title: verifiedTitle || candidate.discovered_title,
         reference_title: reference.title,
         rights_holder: reference.rights_holder,
-        match_status: comparison.matchStatus,
-        match_classification: comparison.matchClassification,
+        // Never use metadata alone to claim copyright infringement, and never confirm a match when blocked by identity conflict / static preview uncertainty
+        match_status: isConfirmedMatch ? 'POTENTIAL_MATCH' : 'NO_MATCH',
+        match_classification:
+          !isConfirmedMatch && overallAssessmentState === 'POSSIBLE_MATCH'
+            ? 'UNCERTAIN_MATCH'
+            : !isConfirmedMatch && overallAssessmentState === 'NO_MATCH_FOUND'
+            ? 'NO_MATCH'
+            : comparison.matchClassification,
         confidence_score: comparison.confidenceScore,
+        visual_similarity_score: visualSimScore,
+        metadata_relevance_score: metaRelScore,
+        overall_assessment: overallAssessmentState,
+        metadata_signals: metaAssessment.metadataSignals,
+        captured_frames: capturedFrames,
+        uncertainty_reasons: metaAssessment.uncertaintyReasons,
         min_hamming_dist: comparison.minHammingDist,
         avg_hamming_dist: comparison.avgHammingDist,
         matched_frames_count: comparison.matchedFramesCount,
         total_compared_frames: comparison.totalComparedFrames,
+        reference_duration_sec: comparison.coverageMetrics.reference_duration_sec,
+        candidate_duration_sec: comparison.coverageMetrics.candidate_duration_sec,
+        total_reference_frames: comparison.coverageMetrics.total_reference_frames,
+        total_candidate_frames: comparison.coverageMetrics.total_candidate_frames,
+        unique_reference_frames_matched: comparison.coverageMetrics.unique_reference_frames_matched,
+        unique_candidate_frames_matched: comparison.coverageMetrics.unique_candidate_frames_matched,
+        reference_coverage_pct: comparison.coverageMetrics.reference_coverage_pct,
+        candidate_coverage_pct: comparison.coverageMetrics.candidate_coverage_pct,
+        coverage_metrics: comparison.coverageMetrics,
         temporal_offset_sec: comparison.temporalOffsetSec,
         sample_pairs: comparison.samplePairs,
         audio_match: comparison.audioMatch,
@@ -314,20 +502,121 @@ export class VerifierEngine {
       };
 
       db.insertEvidenceRecord(evidence);
-      log(`Tamper-evident chain of custody seal generated: ${custodySeal.substring(0, 16)}...`);
-    } else if (reference && reference.status !== 'REGISTERED') {
-      log(`Target reference "${reference.title}" has status "${reference.status}" and 0 valid reference keyframes. Cannot confirm perceptual match until a valid reference video is uploaded.`);
-      acqStatus = 'ACQUIRED_AWAITING_VALID_REFERENCE';
+      log(`Evidence record preserved in Vault (Assessment: ${overallAssessmentState}, Seal: ${custodySeal.substring(0, 16)}...)`);
+    } else if (reference) {
+      // Reference is METADATA_REGISTERED, AWAITING_AUTHORIZED_MEDIA, or INVALID (0 reference fingerprints).
+      // Separate evidence collection from match verification: preserve captured candidate frames and metadata assessment in Evidence Vault!
+      const metaAssessment = FingerprintEngine.assessMetadataAndContext({
+        candidate: candidateWithPlatform,
+        reference,
+        verifiedPageTitle: verifiedTitle,
+        candidateFps: candidateFingerprints,
+        referenceFps: [],
+        visualSimilarityScore: undefined,
+        matchedFramesCount: 0,
+        minHammingDist: 64,
+        confidenceScore: 0
+      });
+
+      metaRelScore = metaAssessment.metadataRelevanceScore;
+      overallAssessmentState = 'INSUFFICIENT_EVIDENCE';
+
+      if (reference.status === 'METADATA_REGISTERED' || reference.status === 'AWAITING_AUTHORIZED_MEDIA') {
+        log(
+          `[Compliance Gate] Target reference "${reference.title}" (${reference.platform || 'OTT'}) has status "${reference.status}" with 0 perceptual fingerprints. Captured ${capturedFrames.length} candidate frames and evaluated metadata relevance (${(metaRelScore * 100).toFixed(0)}%); visual frame matching awaits authorized reference media.`
+        );
+        acqStatus = 'ACQUIRED_AWAITING_AUTHORIZED_REFERENCE_MEDIA';
+      } else {
+        log(
+          `Target reference "${reference.title}" has status "${reference.status}" and 0 valid reference keyframes. Preserved ${capturedFrames.length} candidate keyframes with INSUFFICIENT_EVIDENCE status.`
+        );
+        acqStatus = 'ACQUIRED_AWAITING_VALID_REFERENCE';
+      }
+
+      const custodySeal = FingerprintEngine.generateCustodySeal({
+        candidateUrl: candidate.source_url,
+        referenceId: reference.id,
+        confidenceScore: 0,
+        minHammingDist: 64,
+        temporalOffsetSec: 0,
+        samplePairs: []
+      });
+
+      evidence = {
+        id: `ev_${candidate.id}`,
+        candidate_id: candidate.id,
+        reference_id: reference.id,
+        candidate_url: candidate.source_url,
+        candidate_domain: candidate.domain,
+        candidate_platform: platformName,
+        candidate_title: verifiedTitle || candidate.discovered_title,
+        reference_title: reference.title,
+        rights_holder: reference.rights_holder,
+        match_status: 'NO_MATCH',
+        match_classification: 'UNCERTAIN_MATCH',
+        confidence_score: 0,
+        visual_similarity_score: undefined,
+        metadata_relevance_score: metaRelScore,
+        overall_assessment: 'INSUFFICIENT_EVIDENCE',
+        metadata_signals: metaAssessment.metadataSignals,
+        captured_frames: capturedFrames,
+        uncertainty_reasons: metaAssessment.uncertaintyReasons,
+        min_hamming_dist: 64,
+        avg_hamming_dist: 64,
+        matched_frames_count: 0,
+        total_compared_frames: candidateFingerprints.length,
+        temporal_offset_sec: 0,
+        sample_pairs: [],
+        chain_of_custody_sha256: custodySeal,
+        review_decision: 'PENDING',
+        created_at: new Date().toISOString()
+      };
+
+      db.insertEvidenceRecord(evidence);
     } else {
       log(`No target reference linked. Candidate keyframes extracted and stored (${acqStatus}).`);
     }
 
-    // Update candidate state in SQLite
+    // Update candidate state in SQLite including captured frame provenance and assessment metrics
+    const existingMethods = (candidate.match_method || 'title_match')
+      .split(',')
+      .map(s => s.trim())
+      .filter(Boolean);
+    if (overallAssessmentState === 'MATCH_FOUND' && !existingMethods.includes('frame_match')) {
+      existingMethods.push('frame_match');
+    }
+    const updatedMatchMethod = Array.from(new Set(existingMethods)).join(', ');
+
+    let updatedProvJson = candidate.discovery_provenance_json;
+    if (candidate.discovery_provenance) {
+      const prov = {
+        ...candidate.discovery_provenance,
+        match_methods: Array.from(new Set([...(candidate.discovery_provenance.match_methods || []), ...existingMethods]))
+      };
+      updatedProvJson = JSON.stringify(prov);
+    }
+
     db.updateCandidateVerification(candidate.id, {
       pipeline_status: pipelineStatus,
       acquisition_status: acqStatus,
+      final_url: finalUrl,
+      final_domain: finalDomain,
+      crawl_status: crawlStatus,
+      candidate_classification: 'VERIFIED_VIDEO_ASSET',
+      asset_kind: 'VERIFIED_VIDEO_ASSET',
       platform: platformName,
-      media_url: probeResult.resolvedMediaUrl,
+      media_url: probeResult.resolvedMediaUrl || candidate.media_url,
+      match_method: updatedMatchMethod,
+      matched_content_id: overallAssessmentState === 'MATCH_FOUND' ? (refId || candidate.matched_content_id) : candidate.matched_content_id,
+      discovery_provenance_json: updatedProvJson,
+      thumbnail_url: firstCapturedThumb,
+      frame_evidence: JSON.stringify(capturedFrames),
+      visual_similarity_score: visualSimScore,
+      metadata_relevance_score: metaRelScore,
+      overall_assessment: overallAssessmentState,
+      research_relevance_score: candidateResearchEval.research_relevance_score,
+      identity_relationship: candidateResearchEval.identity_relationship,
+      detected_identity_json: JSON.stringify(candidateResearchEval),
       reachability_code: reachabilityCode,
       reachability_latency_ms: latencyMs,
       media_type: mediaType,

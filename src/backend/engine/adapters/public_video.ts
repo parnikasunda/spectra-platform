@@ -6,6 +6,7 @@
 
 import { SourceAdapter, DiscoveredItem, MediaAcquisitionResult, AdapterDiagnostic } from './types.js';
 import { YouTubeAdapter } from './youtube.js';
+import { CandidateResearchEngine } from '../candidateResearch.js';
 
 export class PublicVideoPlatformsAdapter implements SourceAdapter {
   public id = 'adapter_public_video';
@@ -71,10 +72,16 @@ export class PublicVideoPlatformsAdapter implements SourceAdapter {
 
         for (const item of dmList) {
           if (!item?.id || !item?.title) continue;
-          const relevance = YouTubeAdapter.computeRelevanceScore(item.title, cleanQuery, options.referenceTitle);
-          if (relevance < 0.15) continue;
-
           const videoUrl = item.url || `https://www.dailymotion.com/video/${item.id}`;
+          const genericCheck = CandidateResearchEngine.isGenericPlatformTestVideo(
+            `${item.title} ${videoUrl}`,
+            options.referenceTitle || cleanQuery
+          );
+          if (genericCheck.isGenericTest) continue;
+
+          const relevance = YouTubeAdapter.computeRelevanceScore(item.title, cleanQuery, options.referenceTitle);
+          if (relevance < 0.25) continue;
+
           results.push({
             url: videoUrl,
             title: String(item.title).trim(),
@@ -126,12 +133,19 @@ export class PublicVideoPlatformsAdapter implements SourceAdapter {
         for (const doc of docs) {
           if (!doc?.identifier || !doc?.title) continue;
           const titleStr = Array.isArray(doc.title) ? doc.title[0] : String(doc.title);
+          const itemUrl = `https://archive.org/details/${doc.identifier}`;
+          const genericCheck = CandidateResearchEngine.isGenericPlatformTestVideo(
+            `${titleStr} ${itemUrl}`,
+            options.referenceTitle || cleanQuery
+          );
+          if (genericCheck.isGenericTest) continue;
+
           const relevance = YouTubeAdapter.computeRelevanceScore(titleStr, cleanQuery, options.referenceTitle);
           // Require stronger keyword overlap on Internet Archive to avoid unrelated items
-          if (relevance < 0.25) continue;
+          if (relevance < 0.28) continue;
 
           results.push({
-            url: `https://archive.org/details/${doc.identifier}`,
+            url: itemUrl,
             title: titleStr.trim(),
             platform: 'Internet Archive',
             sourceCategory: 'PUBLIC_PLATFORM',

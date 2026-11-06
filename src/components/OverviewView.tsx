@@ -1,5 +1,5 @@
 /**
- * Argus Anti-Piracy Intelligence & Evidence Platform
+ * SPECTRA Anti-Piracy Intelligence & Evidence Platform
  * Overview & Intelligence Dashboard
  */
 
@@ -49,7 +49,7 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
           <div className="max-w-2xl space-y-2">
             <div className="flex items-center gap-2 text-xs text-cyan-400 font-mono">
               <span className="w-1.5 h-1.5 rounded-full bg-cyan-400" />
-              <span>Argus Operational State</span>
+              <span>SPECTRA Operational State</span>
               <span className="text-slate-600">·</span>
               <span className="text-slate-400">Continuous Perceptual Media Forensics</span>
             </div>
@@ -204,6 +204,30 @@ export const OverviewView: React.FC<OverviewViewProps> = ({
               {stats?.confirmed_infringements || 0}
             </div>
             <div className="text-[10px] text-slate-400 mt-1">Human reviewed</div>
+          </div>
+        </div>
+
+        {/* Additive Candidate Status & Provenance Breakdown */}
+        <div className="grid grid-cols-2 sm:grid-cols-5 gap-2.5 pt-2 border-t border-slate-800/60">
+          <div className="px-3 py-2 bg-slate-950/50 border border-slate-800/80 rounded flex items-center justify-between">
+            <span className="text-[11px] text-slate-400 font-mono">DISCOVERED</span>
+            <span className="text-xs font-bold text-white font-mono tabular-nums">{stats?.total_candidates ?? 0}</span>
+          </div>
+          <div className="px-3 py-2 bg-slate-950/50 border border-cyan-900/40 rounded flex items-center justify-between">
+            <span className="text-[11px] text-cyan-400 font-mono">VERIFIED VIDEO</span>
+            <span className="text-xs font-bold text-cyan-300 font-mono tabular-nums">{stats?.verified_video_candidates ?? stats?.analyzed_candidates ?? 0}</span>
+          </div>
+          <div className="px-3 py-2 bg-slate-950/50 border border-rose-900/40 rounded flex items-center justify-between">
+            <span className="text-[11px] text-rose-400 font-mono">INACCESSIBLE</span>
+            <span className="text-xs font-bold text-rose-300 font-mono tabular-nums">{stats?.inaccessible_candidates ?? 0}</span>
+          </div>
+          <div className="px-3 py-2 bg-slate-950/50 border border-slate-800/80 rounded flex items-center justify-between">
+            <span className="text-[11px] text-slate-300 font-mono">DUPLICATES MERGED</span>
+            <span className="text-xs font-bold text-slate-200 font-mono tabular-nums">{stats?.duplicate_candidates ?? 0}</span>
+          </div>
+          <div className="px-3 py-2 bg-slate-950/50 border border-amber-900/40 rounded flex items-center justify-between">
+            <span className="text-[11px] text-amber-400 font-mono">PENDING REVIEW</span>
+            <span className="text-xs font-bold text-amber-300 font-mono tabular-nums">{stats?.pending_reviews ?? 0}</span>
           </div>
         </div>
       </div>

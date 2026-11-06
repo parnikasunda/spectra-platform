@@ -6,3 +6,17 @@ coverage/
 *.log
 .env*
 !.env.example
+
+# Runtime persistence, SQLite databases, backups, extracted frames & uploaded media
+data/*
+!data/user_references_journal.json
+uploads/
+*.db
+*.db-journal
+*.db-shm
+*.db-wal
+*.sqlite
+*.sqlite3
+*.backup
+*.pre_cleanup_backup
+.aistudio/

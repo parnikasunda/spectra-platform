@@ -20,30 +20,26 @@ import {
   DiscoveryJob 
 } from '../types.js';
 
-// Ensures media and thumbnails directories exist and purges any unreferenced/synthetic thumbnails
+// Ensures media and thumbnails directories exist and purges only legacy synthetic SVG files
 export function ensureMasterVideosExist() {
   const mediaDir = path.resolve(process.cwd(), 'data', 'media');
   if (!fs.existsSync(mediaDir)) {
     fs.mkdirSync(mediaDir, { recursive: true });
   }
 
-  // Remove any synthetic SVG thumbnails or orphaned test-pattern JPEGs not linked to a REGISTERED reference
   const thumbnailsDir = path.resolve(process.cwd(), 'data', 'thumbnails');
-  if (fs.existsSync(thumbnailsDir)) {
+  if (!fs.existsSync(thumbnailsDir)) {
+    fs.mkdirSync(thumbnailsDir, { recursive: true });
+  } else {
     try {
-      const validRefs = db.getReferences().filter(r => r.status === 'REGISTERED');
-      const validThumbFiles = new Set<string>();
-      for (const r of validRefs) {
-        if (r.thumbnail_url) validThumbFiles.add(path.basename(r.thumbnail_url));
-        const fps = db.getReferenceFingerprints(r.id);
-        for (const fp of fps) {
-          if (fp.thumbnail_url) validThumbFiles.add(path.basename(fp.thumbnail_url));
-          if (fp.thumbnail_path) validThumbFiles.add(path.basename(fp.thumbnail_path));
-        }
+      // Trigger self-healing for any persisted references whose thumbnail files exist in SQLite base64 data
+      const allRefs = db.getReferences();
+      for (const r of allRefs) {
+        db.getReferenceFingerprints(r.id);
       }
       const existing = fs.readdirSync(thumbnailsDir);
       for (const file of existing) {
-        if (file.endsWith('.svg') || !validThumbFiles.has(file)) {
+        if (file.endsWith('.svg')) {
           try { fs.unlinkSync(path.join(thumbnailsDir, file)); } catch {}
         }
       }
@@ -52,7 +48,7 @@ export function ensureMasterVideosExist() {
 }
 
 export function loadOptionalForensicTestSuite(): { loadedReferences: number; loadedCandidates: number } {
-  db.clearAll();
+  db.clearForensicSamplesOnly();
   ensureMasterVideosExist();
 
   const now = new Date().toISOString();
@@ -120,9 +116,13 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     notes: ref1Notes
   };
 
-  db.insertReference(ref1);
-  if (ref1Fingerprints.length > 0) {
-    db.insertReferenceFingerprints(ref1Fingerprints);
+  const existingRef1 = db.getReferenceById(ref1Id);
+  if (!existingRef1 || !db.isUserOwnedReference(existingRef1)) {
+    db.clearReferenceFingerprints(ref1Id);
+    db.upsertReference(ref1);
+    if (ref1Fingerprints.length > 0) {
+      db.insertReferenceFingerprints(ref1Fingerprints);
+    }
   }
 
   // -------------------------------------------------------------
@@ -182,9 +182,13 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     notes: ref2Notes
   };
 
-  db.insertReference(ref2);
-  if (ref2Fingerprints.length > 0) {
-    db.insertReferenceFingerprints(ref2Fingerprints);
+  const existingRef2 = db.getReferenceById(ref2Id);
+  if (!existingRef2 || !db.isUserOwnedReference(existingRef2)) {
+    db.clearReferenceFingerprints(ref2Id);
+    db.upsertReference(ref2);
+    if (ref2Fingerprints.length > 0) {
+      db.insertReferenceFingerprints(ref2Fingerprints);
+    }
   }
 
   // -------------------------------------------------------------
@@ -514,9 +518,13 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
     fingerprint_count: ref3Fingerprints.length,
     notes: ref3Notes
   };
-  db.insertReference(ref3);
-  if (ref3Fingerprints.length > 0) {
-    db.insertReferenceFingerprints(ref3Fingerprints);
+  const existingRef3 = db.getReferenceById(ref3Id);
+  if (!existingRef3 || !db.isUserOwnedReference(existingRef3)) {
+    db.clearReferenceFingerprints(ref3Id);
+    db.upsertReference(ref3);
+    if (ref3Fingerprints.length > 0) {
+      db.insertReferenceFingerprints(ref3Fingerprints);
+    }
   }
 
   // -------------------------------------------------------------
@@ -1075,12 +1083,24 @@ export function loadOptionalForensicTestSuite(): { loadedReferences: number; loa
 }
 
 /**
- * Ensures Taylor Swift — Patient Zero is registered in the database (or marked INVALID if its source is a test pattern).
+ * Ensures Taylor Swift — Patient Zero demo fixture is registered ONLY when SPECTRA_LOAD_DEMO_FIXTURES === 'true'
+ * and no user-owned reference already exists for it. Never automatically seeds fake records in normal mode.
  */
 export function ensureTaylorSwiftPatientZeroRegistered(): void {
   ensureMasterVideosExist();
-  const existing = db.getReferenceById('ref_taylor_swift_patient_zero');
-  if (existing) return;
+  if (process.env.SPECTRA_LOAD_DEMO_FIXTURES !== 'true') {
+    return;
+  }
+  const existingById = db.getReferenceById('ref_taylor_swift_patient_zero');
+  if (existingById) return;
+
+  const existingUserOwned = db.getReferences().find(
+    r =>
+      db.isUserOwnedReference(r) &&
+      r.title.toLowerCase().includes('taylor swift') &&
+      r.title.toLowerCase().includes('patient zero')
+  );
+  if (existingUserOwned) return;
 
   const now = new Date().toISOString();
   const tsMasterPath = path.resolve(process.cwd(), 'data', 'media', 'taylor_swift_patient_zero_master.mp4');
